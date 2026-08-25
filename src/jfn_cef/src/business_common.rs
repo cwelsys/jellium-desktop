@@ -70,6 +70,7 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
         "audioExclusive" => jfn_config::set_audio_exclusive(value == "true"),
         "audioChannels" => jfn_config::set_audio_channels(value),
         "hideScrollbar" => jfn_config::set_hide_scrollbar(value == "true"),
+        "closeToTray" => jfn_config::set_close_to_tray(value == "true"),
         "logLevel" => jfn_config::set_log_level(value),
         "forceTranscoding" => jfn_config::set_force_transcoding(value == "true"),
         // Pass empty platform_default — Rust setter clears when raw equals

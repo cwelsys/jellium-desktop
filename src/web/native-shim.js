@@ -105,6 +105,7 @@
                 transparentTitlebar: _savedSettings.transparentTitlebar !== false,
                 windowDecorations: __WINDOW_DECORATIONS__,
                 hideScrollbar: _savedSettings.hideScrollbar !== false,
+                closeToTray: !!_savedSettings.closeToTray,
                 logLevel: _savedSettings.logLevel || '',
                 deviceName: _savedSettings.deviceName || ''
             }
@@ -127,6 +128,7 @@
                 { key: 'forceTranscoding', displayName: 'Force Transcoding', help: 'Always request a transcoded stream from the server, even when direct play would work.' }
             ],
             advanced: [
+                { key: 'closeToTray', displayName: 'Close to Tray', help: 'Closing the window hides it in the system tray instead of quitting. The app keeps playing and stays available to cast to. Quit from the tray menu.' },
                 { key: 'hideScrollbar', displayName: 'Hide Scrollbar', help: 'Hide scrollbars throughout the app. Scrolling with the wheel, trackpad, and keyboard still works. Requires restart.' },
                 { key: 'deviceName', displayName: 'Device Name', help: 'Identifies this machine to the server. Leave blank to use the system hostname.', inputType: 'text', maxLength: 64, placeholder: _savedSettings.deviceNameDefault },
                 { key: 'logLevel', displayName: 'Log Level', help: 'Set the application log verbosity level.', options: [

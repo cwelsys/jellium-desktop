@@ -62,6 +62,7 @@ struct SettingsData {
     force_transcoding: bool,
     window_decorations: Option<WindowDecorations>,
     hide_scrollbar: bool,
+    close_to_tray: bool,
 }
 
 impl Default for SettingsData {
@@ -80,6 +81,7 @@ impl Default for SettingsData {
             force_transcoding: false,
             window_decorations: None,
             hide_scrollbar: true,
+            close_to_tray: false,
         }
     }
 }
@@ -153,6 +155,9 @@ struct SettingsFile {
     hide_scrollbar: Option<bool>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    close_to_tray: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     device_name: Option<String>,
 }
 
@@ -221,6 +226,8 @@ struct CliSettings<'a> {
     force_transcoding: bool,
 
     hide_scrollbar: bool,
+
+    close_to_tray: bool,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     device_name: Option<&'a str>,
@@ -293,6 +300,9 @@ impl SettingsData {
         if let Some(v) = file.hide_scrollbar {
             self.hide_scrollbar = v;
         }
+        if let Some(v) = file.close_to_tray {
+            self.close_to_tray = v;
+        }
     }
 
     fn to_file(&self) -> SettingsFile {
@@ -321,6 +331,7 @@ impl SettingsData {
             force_transcoding: self.force_transcoding.then_some(true),
             window_decorations: self.window_decorations,
             hide_scrollbar: (!self.hide_scrollbar).then_some(false),
+            close_to_tray: self.close_to_tray.then_some(true),
             device_name: (!self.device_name.is_empty()).then(|| self.device_name.clone()),
         }
     }
@@ -338,6 +349,7 @@ impl SettingsData {
             log_level: (!self.log_level.is_empty()).then_some(self.log_level.as_str()),
             force_transcoding: self.force_transcoding,
             hide_scrollbar: self.hide_scrollbar,
+            close_to_tray: self.close_to_tray,
             device_name: (!self.device_name.is_empty()).then_some(self.device_name.as_str()),
             device_name_default: default_device_name(),
             hwdec_options: hwdec_opts,
@@ -603,6 +615,7 @@ pub fn titlebar_theme_color() -> bool {
     window_decorations_mode() == WindowDecorations::ServerThemed
 }
 bool_accessors!(hide_scrollbar, set_hide_scrollbar, hide_scrollbar);
+bool_accessors!(close_to_tray, set_close_to_tray, close_to_tray);
 
 pub fn window_geometry() -> JfnWindowGeometry {
     state().lock().data.window
@@ -723,6 +736,7 @@ mod tests {
             force_transcoding: true,
             window_decorations: Some(WindowDecorations::ServerThemed),
             hide_scrollbar: false,
+            close_to_tray: true,
         };
         let text = serde_json::to_string(&data.to_file()).expect("serializes");
         assert_eq!(
@@ -747,11 +761,24 @@ mod tests {
                 "forceTranscoding",
                 "windowDecorations",
                 "hideScrollbar",
+                "closeToTray",
                 "deviceName",
             ]
         );
         assert!(text.contains(r#""windowDecorations":"serverThemed""#));
         assert!(text.contains(r#""windowScale":1.5"#));
+    }
+
+    #[test]
+    fn close_to_tray_defaults_off_and_round_trips() {
+        assert!(!SettingsData::default().close_to_tray);
+        assert!(loaded(r#"{"closeToTray":true}"#).close_to_tray);
+        assert!(!loaded(r#"{"serverUrl":"http://host"}"#).close_to_tray);
+
+        let mut data = SettingsData::default();
+        data.close_to_tray = true;
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""closeToTray":true"#));
     }
 
     #[test]
@@ -806,6 +833,7 @@ mod tests {
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
+                "closeToTray",
                 "deviceName",
                 "deviceNameDefault",
                 "hwdecOptions",
