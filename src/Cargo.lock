@@ -2610,6 +2610,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "jfn-tray"
+version = "0.1.0-dev"
+
+[[package]]
 name = "jfn-wake-event"
 version = "0.1.0-dev"
 dependencies = [
