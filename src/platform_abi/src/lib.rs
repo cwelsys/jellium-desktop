@@ -488,6 +488,10 @@ pub trait Platform: Send + Sync {
     // Window controls for client-side decorations. Default no-ops cover
     // backends without CSD (X11 WMs / macOS / Windows draw their own).
     fn window_minimize(&self) {}
+    /// Map or unmap the app's toplevel. Hiding keeps the process, the browser
+    /// session, and mpv running — only the window leaves the screen. Default
+    /// no-op: platforms without tray support keep today's behavior.
+    fn window_set_visible(&self, _visible: bool) {}
     fn window_toggle_maximize(&self) {}
     /// Begin an interactive, compositor-driven window move. Must be called in
     /// response to a pointer button press on the titlebar drag region.

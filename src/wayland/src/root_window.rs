@@ -98,6 +98,7 @@ pub(crate) struct RootShared {
     commands_rx: Receiver<WindowCommand>,
     pending_fs: AtomicU8,
     maximized: AtomicBool,
+    hidden: AtomicBool,
     pending_bg: AtomicU32,
     pending_present: AtomicBool,
     /// Protocol id of the most recent menu popup `wl_surface`, overwritten by
@@ -138,6 +139,7 @@ impl RootShared {
             commands_rx,
             pending_fs: AtomicU8::new(FS_NONE),
             maximized: AtomicBool::new(false),
+            hidden: AtomicBool::new(false),
             pending_bg: AtomicU32::new(0),
             pending_present: AtomicBool::new(false),
             menu_surface_id: AtomicU32::new(0),
@@ -246,6 +248,14 @@ impl RootShared {
         self.send(WindowCommand::Minimize);
     }
 
+    pub(crate) fn set_visible(&self, visible: bool) {
+        self.send(WindowCommand::SetVisible(visible));
+    }
+
+    pub(crate) fn hidden(&self) -> bool {
+        self.hidden.load(Ordering::Acquire)
+    }
+
     pub(crate) fn set_background_color(&self, r: u8, g: u8, b: u8) {
         let rgb = (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
         self.pending_bg.store(BG_SET | rgb, Ordering::Release);
@@ -339,6 +349,7 @@ struct RootState {
     present: Option<Presented>,
     scale_discovery: ScaleDiscovery,
     pre_fs_maximized: bool,
+    remap_pending: bool,
     stop: Arc<AtomicBool>,
 }
 
@@ -704,6 +715,7 @@ enum WindowCommand {
     },
     SetMaximized(bool),
     Minimize,
+    SetVisible(bool),
     #[cfg(feature = "kde-palette")]
     SetTitlebarPalette(String),
     Popup(PopupCommand),
@@ -761,6 +773,7 @@ fn apply_command(state: &mut RootState, cmd: WindowCommand) {
             }
         }
         WindowCommand::Minimize => state.window.set_minimized(),
+        WindowCommand::SetVisible(visible) => set_window_visible(state, visible),
         #[cfg(feature = "kde-palette")]
         WindowCommand::SetTitlebarPalette(path) => {
             if let Some(p) = &state.palette {
@@ -783,6 +796,22 @@ fn apply_command(state: &mut RootState, cmd: WindowCommand) {
         },
     }
     let _ = state.conn.flush();
+}
+
+/// A null-buffer commit unmaps the toplevel but keeps the `wl_surface` alive,
+/// so mpv's video subsurface and the CEF overlay layers stay parented. Showing
+/// is the roleless commit again, to elicit a fresh configure.
+fn set_window_visible(state: &mut RootState, visible: bool) {
+    let surface = state.window.wl_surface().clone();
+    state.rt.root().hidden.store(!visible, Ordering::Release);
+    if visible {
+        state.remap_pending = true;
+        surface.commit();
+    } else {
+        surface.attach(None, 0, 0);
+        surface.commit();
+    }
+    jfn_playback::lifecycle::jfn_lifecycle_set_visible(visible);
 }
 
 // Fullscreen requests posted here and applied on the root thread by
@@ -1309,6 +1338,7 @@ pub(crate) fn ensure_started(rt: &'static WlRuntime) {
         present: None,
         scale_discovery: ScaleDiscovery::Idle,
         pre_fs_maximized: false,
+        remap_pending: false,
         stop: stop.clone(),
     };
 
@@ -1548,6 +1578,9 @@ impl WindowHandler for RootState {
         _: u32,
     ) {
         let (w, h) = configure.new_size;
+        if self.rt.root().hidden() {
+            return;
+        }
         self.pending_w = w.and_then(logical_extent);
         self.pending_h = h.and_then(logical_extent);
 
@@ -1580,6 +1613,12 @@ impl WindowHandler for RootState {
                 tracing::info!(target: "Main", "decorations: compositor set {effective:?}");
                 jfn_platform_abi::notify_decorations_changed();
             }
+        }
+
+        if self.remap_pending {
+            self.remap_pending = false;
+            self.attach_background();
+            crate::wl_state::damage_all(self.surface());
         }
 
         self.pending_configure = Some(present_cap::acked(&configure));

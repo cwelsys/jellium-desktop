@@ -205,6 +205,10 @@ impl Platform for WaylandPlatform {
         self.rt().root().set_minimized();
     }
 
+    fn window_set_visible(&self, visible: bool) {
+        self.rt().root().set_visible(visible);
+    }
+
     fn window_toggle_maximize(&self) {
         self.rt().root().toggle_maximize();
     }
