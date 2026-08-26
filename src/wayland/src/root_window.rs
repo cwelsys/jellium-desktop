@@ -606,6 +606,24 @@ mod remap {
 }
 use remap::{OnConfigure, OnShow, Remap};
 
+/// A toplevel state the client can ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModeRequest {
+    Maximized,
+    Fullscreen,
+}
+
+/// What a show must re-request to bring the window back in the mode it was
+/// hidden in. An unmapped toplevel returns to floating on its own, and tiling
+/// is the compositor's to decide, so neither needs anything.
+fn remap_mode_request(mode: crate::window_state::WindowMode) -> Option<ModeRequest> {
+    match mode {
+        crate::window_state::WindowMode::Maximized => Some(ModeRequest::Maximized),
+        crate::window_state::WindowMode::Fullscreen => Some(ModeRequest::Fullscreen),
+        crate::window_state::WindowMode::Floating | crate::window_state::WindowMode::Tiled => None,
+    }
+}
+
 impl RootState {
     fn resolve_logical(&self) -> Option<crate::window_state::WindowSize> {
         resolve_logical_size(
@@ -749,24 +767,33 @@ impl RootState {
         crate::wl_state::damage_all(self.surface());
     }
 
-    /// Re-state the negotiated decoration mode across a re-map.
+    /// Re-state what the unmap discarded, ahead of the commit that re-maps.
     ///
-    /// The re-map puts the toplevel through map/unmap again, so the compositor
-    /// re-runs decoration negotiation. Under `Auto` we send no `set_mode` and it
-    /// is free to answer differently than it did at boot — which it does, and a
-    /// server-side window comes back client-side with the web UI drawing its own
-    /// titlebar. Nothing about the window changed, so a trip through the tray
-    /// must not restyle it. This stays a request: a compositor that insists on a
-    /// mode still wins the following configure.
-    fn reassert_decorations(&self) {
-        if !self.decorations_negotiated {
-            return;
+    /// xdg-shell drops every toplevel attribute at unmap: the toplevel "returns
+    /// to the state it had right after xdg_surface.get_toplevel". Boot sets
+    /// these once, so without this a re-map comes back nameless, without its app
+    /// id, un-maximized, and — under `Auto`, where we send no `set_mode` — with
+    /// whatever decorations the compositor picks the second time around.
+    ///
+    /// Nothing about the window changed, so a trip through the tray must not
+    /// restyle it. These stay requests: a compositor that insists otherwise
+    /// still wins the following configure.
+    fn reassert_toplevel_state(&self) {
+        self.window.set_title(TITLE);
+        self.window.set_app_id(APP_ID);
+        match remap_mode_request(self.mode) {
+            Some(ModeRequest::Maximized) => self.window.set_maximized(),
+            Some(ModeRequest::Fullscreen) => self.window.set_fullscreen(None),
+            None => {}
         }
-        self.window
-            .request_decoration_mode(Some(match self.rt.root().effective_decorations() {
-                EffectiveDecorations::ServerSide => sctk_window::DecorationMode::Server,
-                EffectiveDecorations::ClientSide => sctk_window::DecorationMode::Client,
-            }));
+        if self.decorations_negotiated {
+            self.window.request_decoration_mode(Some(
+                match self.rt.root().effective_decorations() {
+                    EffectiveDecorations::ServerSide => sctk_window::DecorationMode::Server,
+                    EffectiveDecorations::ClientSide => sctk_window::DecorationMode::Client,
+                },
+            ));
+        }
     }
 
     /// Re-attach the background the unmap detached, so the commit that follows
@@ -932,9 +959,9 @@ fn set_window_visible(state: &mut RootState, visible: bool) {
         surface.commit();
         return;
     }
-    // Ahead of the commit that re-maps, so the compositor's decoration answer
-    // for this map already has the preference in hand.
-    state.reassert_decorations();
+    // Ahead of the commit that re-maps, so the configure answering this map
+    // already has the title, app id, mode and decoration preference in hand.
+    state.reassert_toplevel_state();
     match state.remap.show() {
         // The surface is unconfigured, so this roleless commit is an initial
         // commit and the configure it draws completes the re-map.
@@ -2122,10 +2149,32 @@ mod tests {
     use super::present_cap::token_for_test;
     use super::presentation::{Inputs, ScaleDiscovery, Step, plan};
     use super::remap::{OnConfigure, OnShow, Remap};
-    use super::resolve_logical_size;
+    use super::{ModeRequest, remap_mode_request, resolve_logical_size};
     use crate::window_state::{WindowMode, WindowSize};
     use jfn_platform_abi::MenuPlacement;
     use std::num::NonZeroI32;
+
+    #[test]
+    fn a_maximized_or_fullscreen_window_re_requests_its_mode_on_show() {
+        // The unmap discarded the states, so the compositor maps a plain
+        // floating window back unless they are asked for again.
+        assert_eq!(
+            remap_mode_request(WindowMode::Maximized),
+            Some(ModeRequest::Maximized)
+        );
+        assert_eq!(
+            remap_mode_request(WindowMode::Fullscreen),
+            Some(ModeRequest::Fullscreen)
+        );
+    }
+
+    #[test]
+    fn a_floating_or_tiled_window_asks_for_no_mode_on_show() {
+        // Floating is what an unmapped toplevel already returns to, and tiling
+        // is the compositor's to decide — there is no request to re-send.
+        assert_eq!(remap_mode_request(WindowMode::Floating), None);
+        assert_eq!(remap_mode_request(WindowMode::Tiled), None);
+    }
 
     #[test]
     fn a_silent_unmap_remaps_on_the_configure_the_show_elicits() {
