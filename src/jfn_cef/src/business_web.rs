@@ -21,7 +21,7 @@ use crate::business_common::{apply_setting_value, js_cstr_or_warn, reject_double
 use crate::client::{Inner, JfnCefLayer, jfn_cef_layer_inner, jfn_cef_layer_set_name};
 use crate::ipc::{BrowserMessage, list_int, list_opt_string, list_string};
 use jfn_color::jfn_cef_parse_color;
-use jfn_color::theme::{jfn_theme_color_on_color, jfn_theme_color_set_video_mode};
+use jfn_color::theme::jfn_theme_color_on_color;
 use jfn_mpv::api::{
     jfn_mpv_audio_add, jfn_mpv_load_file, jfn_mpv_pause, jfn_mpv_play, jfn_mpv_seek_absolute,
     jfn_mpv_set_aspect_mode, jfn_mpv_set_audio_delay, jfn_mpv_set_audio_track, jfn_mpv_set_muted,
@@ -239,7 +239,9 @@ fn handle_player_load(args: &ListValue) {
     pb_post(PbInput::Position(start_ms as i64 * 1000));
 
     if !metadata_json.is_empty() {
-        jfn_theme_color_set_video_mode(meta.media_type == MT_VIDEO);
+        jfn_playback::theme_color_sink::jfn_playback_theme_video_mode_changed(
+            meta.media_type == MT_VIDEO,
+        );
         post_metadata(&meta);
     }
 
@@ -388,7 +390,9 @@ fn handle_message(message: BrowserMessage) -> bool {
         }),
         "notifyMetadata" => with_args(args, |a| {
             let meta = parse_metadata_json(&list_string(a, 0));
-            jfn_theme_color_set_video_mode(meta.media_type == MT_VIDEO);
+            jfn_playback::theme_color_sink::jfn_playback_theme_video_mode_changed(
+                meta.media_type == MT_VIDEO,
+            );
             post_metadata(&meta);
         }),
         "notifyArtwork" => with_args(args, |a| {
