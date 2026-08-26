@@ -804,6 +804,8 @@ fn apply_command(state: &mut RootState, cmd: WindowCommand) {
 fn set_window_visible(state: &mut RootState, visible: bool) {
     let surface = state.window.wl_surface().clone();
     state.rt.root().hidden.store(!visible, Ordering::Release);
+    // Commits outside the present latch, like the boot-time roleless commit:
+    // neither branch attaches new content, so a same-tick latch commit can't race it.
     if visible {
         state.remap_pending = true;
         surface.commit();
@@ -1619,6 +1621,9 @@ impl WindowHandler for RootState {
             self.remap_pending = false;
             self.attach_background();
             crate::wl_state::damage_all(self.surface());
+            // set_window_visible already asserted visible=true unconditionally;
+            // re-assert the real suspended state in case it raced ahead of it.
+            crate::window_state::feed_suspended(self.suspended);
         }
 
         self.pending_configure = Some(present_cap::acked(&configure));
