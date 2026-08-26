@@ -391,13 +391,20 @@ fn start_playback_coordination(instance: &Instance) -> bool {
 
     plat().media_session().start(instance);
 
+    // A backend that can't hide would offer a dead Hide and, with close-to-tray
+    // on, absorb the close into it. Not registering leaves `tray_available`
+    // false, which the policy already reads as "close quits".
     #[cfg(target_os = "linux")]
-    jfn_tray::start(jfn_tray::Callbacks {
-        toggle: || crate::visibility::toggle(),
-        show: || crate::visibility::show(),
-        quit: || jfn_playback::shutdown::jfn_shutdown_initiate(),
-        available: |v| crate::visibility::set_tray_available(v),
-    });
+    if plat().window_can_set_visible() {
+        jfn_tray::start(jfn_tray::Callbacks {
+            toggle: || crate::visibility::toggle(),
+            show: || crate::visibility::show(),
+            quit: || jfn_playback::shutdown::jfn_shutdown_initiate(),
+            available: |v| crate::visibility::set_tray_available(v),
+        });
+    } else {
+        tracing::info!(target: "Tray", "no tray: this backend cannot hide the window");
+    }
 
     jfn_playback::ingest_driver::jfn_playback_set_scale_provider(|| {
         let s = plat().get_scale();

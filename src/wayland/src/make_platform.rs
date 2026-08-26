@@ -209,6 +209,10 @@ impl Platform for WaylandPlatform {
         self.rt().root().set_visible(visible);
     }
 
+    fn window_can_set_visible(&self) -> bool {
+        true
+    }
+
     fn window_toggle_maximize(&self) {
         self.rt().root().toggle_maximize();
     }

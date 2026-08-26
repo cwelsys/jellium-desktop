@@ -492,6 +492,12 @@ pub trait Platform: Send + Sync {
     /// session, and mpv running — only the window leaves the screen. Default
     /// no-op: platforms without tray support keep today's behavior.
     fn window_set_visible(&self, _visible: bool) {}
+    /// Whether [`Platform::window_set_visible`] does anything. False for the
+    /// default no-op, so callers can skip offering a hide that would strand the
+    /// window.
+    fn window_can_set_visible(&self) -> bool {
+        false
+    }
     fn window_toggle_maximize(&self) {}
     /// Begin an interactive, compositor-driven window move. Must be called in
     /// response to a pointer button press on the titlebar drag region.
