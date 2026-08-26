@@ -512,7 +512,7 @@ mod presentation {
                 } else if mode.uses_floating_restore() {
                     floating
                 } else {
-                    cur
+                    cur.or(floating)
                 }
             };
         let w = pick(pending.0, cur.map(|s| s.w()), floating.map(|s| s.w()))?;
@@ -2365,24 +2365,27 @@ mod tests {
     }
 
     #[test]
-    fn maximized_without_compositor_size_defers() {
-        assert_eq!(
-            resolve_logical_size(NONE, None, size(1280, 720), WindowMode::Maximized),
-            None
-        );
-        assert_eq!(
-            resolve_logical_size(NONE, None, size(1280, 720), WindowMode::Fullscreen),
-            None
-        );
+    fn a_sizeless_first_configure_resolves_in_every_mode() {
+        for mode in [
+            WindowMode::Floating,
+            WindowMode::Tiled,
+            WindowMode::Maximized,
+            WindowMode::Fullscreen,
+        ] {
+            assert_eq!(
+                resolve_logical_size(NONE, None, size(1280, 720), mode),
+                size(1280, 720)
+            );
+        }
     }
 
     #[test]
-    fn tiled_defers_like_maximized_not_floating() {
-        // Tiled is compositor-dictated: without a compositor size it must defer,
-        // not fall back to the saved floating size.
+    fn tiled_prefers_the_committed_size_over_floating() {
+        // Tiled is compositor-dictated: once a size is committed, a bare
+        // configure keeps it rather than reverting to the saved floating size.
         assert_eq!(
-            resolve_logical_size(NONE, None, size(1280, 720), WindowMode::Tiled),
-            None
+            resolve_logical_size(NONE, size(1920, 1080), size(1280, 720), WindowMode::Tiled),
+            size(1920, 1080)
         );
         assert!(!WindowMode::Tiled.uses_floating_restore());
     }
