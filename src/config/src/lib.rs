@@ -775,8 +775,10 @@ mod tests {
         assert!(loaded(r#"{"closeToTray":true}"#).close_to_tray);
         assert!(!loaded(r#"{"serverUrl":"http://host"}"#).close_to_tray);
 
-        let mut data = SettingsData::default();
-        data.close_to_tray = true;
+        let data = SettingsData {
+            close_to_tray: true,
+            ..Default::default()
+        };
         let text = serde_json::to_string(&data.to_file()).expect("serializes");
         assert!(text.contains(r#""closeToTray":true"#));
     }
