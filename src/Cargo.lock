@@ -2598,6 +2598,7 @@ dependencies = [
  "jfn-paths",
  "jfn-platform-abi",
  "jfn-playback",
+ "jfn-tray",
  "jfn-wake-event",
  "jfn-wayland",
  "jfn-windows",

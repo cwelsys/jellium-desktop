@@ -48,6 +48,7 @@ gix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 jfn-linux-util = { path = "../linux_util" }
+jfn-tray = { path = "../tray" }
 jfn-wayland = { path = "../wayland", default-features = false }
 jfn-x11 = { path = "../x11" }
 
