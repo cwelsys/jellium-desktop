@@ -24,6 +24,7 @@ static HANDLE: Mutex<Option<ksni::Handle<item::JelliumTray>>> = Mutex::new(None)
 /// StatusNotifierWatcher is on the bus and the caller must keep the window
 /// reachable.
 pub fn start(callbacks: Callbacks) {
+    // Held across the spawn round-trip deliberately: check-and-spawn must be atomic.
     let mut slot = HANDLE.lock();
     if slot.is_some() {
         return;
@@ -43,7 +44,8 @@ pub fn start(callbacks: Callbacks) {
 }
 
 pub fn stop() {
-    if let Some(handle) = HANDLE.lock().take() {
-        async_io::block_on(handle.shutdown());
-    }
+    let Some(handle) = HANDLE.lock().take() else {
+        return;
+    };
+    async_io::block_on(handle.shutdown());
 }
