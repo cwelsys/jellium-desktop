@@ -292,10 +292,17 @@
                 : '#000';
             poster.style.cssText = `position:absolute;top:0;left:0;right:0;bottom:0;background:${bg};`;
 
+            // A hidden page does not paint, so its animations never run and
+            // `animationend` never fires. Playback is awaited on this promise,
+            // so gating it on the animation while hidden deadlocks a cast that
+            // arrives while the window is in the tray. The timeout covers the
+            // rest: the window is raised asynchronously, and the animation can
+            // still start before the first paint lands.
             const ready = new Promise((resolve) => {
-                if (isNewDlg && options.fullscreen) {
+                if (isNewDlg && options.fullscreen && !document.hidden) {
                     dlg.style.animation = 'mpv-video-zoomin 240ms ease-in normal';
                     dlg.addEventListener('animationend', resolve, { once: true });
+                    setTimeout(resolve, 1000);
                 } else {
                     resolve();
                 }
