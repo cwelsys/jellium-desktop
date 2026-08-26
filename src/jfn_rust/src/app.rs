@@ -386,6 +386,14 @@ fn start_playback_coordination(instance: &Instance) -> bool {
 
     plat().media_session().start(instance);
 
+    #[cfg(target_os = "linux")]
+    jfn_tray::start(jfn_tray::Callbacks {
+        toggle: || crate::visibility::toggle(),
+        show: || crate::visibility::show(),
+        quit: || jfn_playback::shutdown::jfn_shutdown_initiate(),
+        available: |v| crate::visibility::set_tray_available(v),
+    });
+
     jfn_playback::ingest_driver::jfn_playback_set_scale_provider(|| {
         let s = plat().get_scale();
         if s > 0.0 { s } else { 1.0 }
@@ -421,6 +429,8 @@ fn shutdown_runtime(manager_thread: std::thread::JoinHandle<()>) {
     plat().mpv_host().detach();
 
     jfn_color::theme::jfn_theme_color_shutdown();
+    #[cfg(target_os = "linux")]
+    jfn_tray::stop();
     plat().media_session().stop();
 
     jfn_playback::ingest_driver::jfn_playback_stop_mpv_event_thread();

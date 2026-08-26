@@ -46,6 +46,7 @@ dispatch2 = { version = "0.3", default-features = false, features = ["std"] }
 gethostname = "1"
 gix = { version = "0.85", default-features = false, features = ["status", "sha1"] }
 interprocess = { version = "2", features = ["tokio"] }
+ksni = { version = "0.3.6", default-features = false, features = ["async-io"] }
 libc = "0.2"
 nix = { version = "0.30", features = ["event", "fs", "poll", "signal", "socket", "time", "uio", "user"] }
 objc2 = "0.6"

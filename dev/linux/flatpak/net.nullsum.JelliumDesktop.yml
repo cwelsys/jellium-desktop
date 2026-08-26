@@ -17,6 +17,8 @@ finish-args:
   - --device=dri
   - --talk-name=org.freedesktop.ScreenSaver
   - --own-name=org.mpris.MediaPlayer2.JelliumDesktop
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --own-name=org.kde.StatusNotifierItem-*
 # The base org.freedesktop.Platform//25.08 libavcodec ships WITHOUT the
 # patent-encumbered h264/hevc decoders (freedesktop moved them out of the base
 # runtime in 25.08 — 24.08 still had h264). Those decoders live only in the
