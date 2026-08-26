@@ -381,6 +381,8 @@ fn start_playback_coordination(instance: &Instance) -> bool {
     jfn_playback::browser_sink::jfn_playback_set_browsers_refresh_rate_handler(Some(
         h_browsers_set_refresh_rate,
     ));
+    #[cfg(target_os = "linux")]
+    jfn_instance_ipc::jfn::set_show_handler(Some(crate::visibility::show));
 
     plat().media_session().start(instance);
 
@@ -602,12 +604,14 @@ pub fn jfn_app_main() -> c_int {
 async fn notify_running(instance: &Instance) -> c_int {
     let acked = async {
         let mut stream = Stream::connect(instance).await?;
-        stream.send(&Request::Ping).await?;
+        stream.send(&Request::Show).await?;
         stream.recv::<Response>().await
     }
     .await;
     match acked {
-        Ok(Some(_)) => tracing::info!(target: "Main", "Signaled existing instance, exiting"),
+        Ok(Some(_)) => {
+            tracing::info!(target: "Main", "Signaled existing instance to show, exiting")
+        }
         Ok(None) => tracing::warn!(target: "Main", "existing instance closed without ack"),
         Err(e) => tracing::warn!(target: "Main", "could not signal existing instance: {e}"),
     }

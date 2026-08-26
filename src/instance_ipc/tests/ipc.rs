@@ -205,3 +205,24 @@ fn distinct_instances_are_isolated() {
     assert_eq!(ra, 1);
     assert_eq!(rb, 2);
 }
+
+#[test]
+fn show_request_runs_the_registered_handler() {
+    use jfn_instance_ipc::jfn::{Request, Response, handle, set_show_handler};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static CALLED: AtomicBool = AtomicBool::new(false);
+    set_show_handler(Some(|| CALLED.store(true, Ordering::SeqCst)));
+
+    assert_eq!(handle(&Request::Show), Response::Shown);
+    assert!(CALLED.load(Ordering::SeqCst));
+
+    set_show_handler(None);
+    assert_eq!(handle(&Request::Show), Response::Shown);
+}
+
+#[test]
+fn ping_still_pongs() {
+    use jfn_instance_ipc::jfn::{Request, Response, handle};
+    assert_eq!(handle(&Request::Ping), Response::Pong);
+}
