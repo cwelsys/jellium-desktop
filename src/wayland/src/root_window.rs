@@ -749,6 +749,26 @@ impl RootState {
         crate::wl_state::damage_all(self.surface());
     }
 
+    /// Re-state the negotiated decoration mode across a re-map.
+    ///
+    /// The re-map puts the toplevel through map/unmap again, so the compositor
+    /// re-runs decoration negotiation. Under `Auto` we send no `set_mode` and it
+    /// is free to answer differently than it did at boot — which it does, and a
+    /// server-side window comes back client-side with the web UI drawing its own
+    /// titlebar. Nothing about the window changed, so a trip through the tray
+    /// must not restyle it. This stays a request: a compositor that insists on a
+    /// mode still wins the following configure.
+    fn reassert_decorations(&self) {
+        if !self.decorations_negotiated {
+            return;
+        }
+        self.window
+            .request_decoration_mode(Some(match self.rt.root().effective_decorations() {
+                EffectiveDecorations::ServerSide => sctk_window::DecorationMode::Server,
+                EffectiveDecorations::ClientSide => sctk_window::DecorationMode::Client,
+            }));
+    }
+
     /// Re-attach the background the unmap detached, so the commit that follows
     /// carries a buffer and maps the toplevel again.
     fn finish_remap(&mut self) {
@@ -912,6 +932,9 @@ fn set_window_visible(state: &mut RootState, visible: bool) {
         surface.commit();
         return;
     }
+    // Ahead of the commit that re-maps, so the compositor's decoration answer
+    // for this map already has the preference in hand.
+    state.reassert_decorations();
     match state.remap.show() {
         // The surface is unconfigured, so this roleless commit is an initial
         // commit and the configure it draws completes the re-map.
