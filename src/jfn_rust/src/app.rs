@@ -386,6 +386,8 @@ fn start_playback_coordination(instance: &Instance) -> bool {
     jfn_instance_ipc::jfn::set_show_handler(Some(crate::visibility::show));
     #[cfg(target_os = "linux")]
     jfn_playback::shutdown::jfn_close_set_handler(Some(crate::visibility::handle_close));
+    #[cfg(target_os = "linux")]
+    jfn_playback::visibility_sink::jfn_playback_set_video_resumed_handler(Some(h_video_resumed));
 
     plat().media_session().start(instance);
 
@@ -863,6 +865,10 @@ extern "C" fn h_theme_video_mode(active: bool) {
     jfn_color::theme::jfn_theme_color_set_video_mode(active);
     #[cfg(target_os = "linux")]
     crate::visibility::handle_video_mode(active);
+}
+#[cfg(target_os = "linux")]
+extern "C" fn h_video_resumed() {
+    crate::visibility::handle_video_resumed();
 }
 extern "C" fn h_web_exec_js(js: *const c_char) {
     if !js.is_null() {

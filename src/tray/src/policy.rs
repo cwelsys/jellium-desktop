@@ -14,6 +14,13 @@ pub enum VisibilityAction {
     Nothing,
 }
 
+/// What hiding does to playback that is already running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaybackAction {
+    Pause,
+    Nothing,
+}
+
 /// Without a registered tray item there is no way back to a hidden window, so
 /// close quits whatever the setting says.
 pub fn on_close(tray_available: bool, close_to_tray: bool) -> CloseAction {
@@ -37,6 +44,30 @@ pub fn on_video_mode(
         (true, false) => (VisibilityAction::Nothing, raised_by_playback),
         (false, _) if raised_by_playback => (VisibilityAction::Hide, false),
         (false, _) => (VisibilityAction::Nothing, false),
+    }
+}
+
+/// An unmapped window shows nothing, so video playing on into it wastes a
+/// decode and leaves the user's place behind. Audio is the opposite: playing
+/// on with no window is the point of the tray, so it is never paused. The rule
+/// does not care who started the video — a cast is paused like anything else.
+pub fn on_hide(video_playing: bool) -> PlaybackAction {
+    if video_playing {
+        PlaybackAction::Pause
+    } else {
+        PlaybackAction::Nothing
+    }
+}
+
+/// Video resuming from any source — MPRIS, a media key, the JS UI — has to put
+/// the window back, or playback would run on with nothing on screen. Showing
+/// the window is not the mirror of this: it deliberately leaves playback
+/// paused, so looking at the window never starts audio.
+pub fn on_video_resumed(hidden: bool) -> VisibilityAction {
+    if hidden {
+        VisibilityAction::Show
+    } else {
+        VisibilityAction::Nothing
     }
 }
 
@@ -74,6 +105,18 @@ mod tests {
             on_video_mode(false, false, false),
             (VisibilityAction::Nothing, false)
         );
+    }
+
+    #[test]
+    fn hide_pauses_video_and_leaves_audio_alone() {
+        assert_eq!(on_hide(true), PlaybackAction::Pause);
+        assert_eq!(on_hide(false), PlaybackAction::Nothing);
+    }
+
+    #[test]
+    fn video_resume_shows_only_a_hidden_window() {
+        assert_eq!(on_video_resumed(true), VisibilityAction::Show);
+        assert_eq!(on_video_resumed(false), VisibilityAction::Nothing);
     }
 
     #[test]

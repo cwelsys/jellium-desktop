@@ -79,6 +79,10 @@ fn register_builtin_sinks(c: &PlaybackCoordinator) {
     c.add_builtin_event_sink(Box::new(|ev: &PlaybackEvent| {
         crate::theme_color_sink::deliver(ev);
     }));
+
+    c.add_builtin_event_sink(Box::new(|ev: &PlaybackEvent| {
+        crate::visibility_sink::deliver(ev);
+    }));
 }
 
 pub fn jfn_playback_shutdown() {

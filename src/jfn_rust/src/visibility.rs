@@ -6,7 +6,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jfn_platform_abi::get as plat;
-use jfn_tray::policy::{CloseAction, VisibilityAction, on_close, on_video_mode};
+use jfn_tray::policy::{
+    CloseAction, PlaybackAction, VisibilityAction, on_close, on_hide, on_video_mode,
+    on_video_resumed,
+};
 
 static HIDDEN: AtomicBool = AtomicBool::new(false);
 static RAISED_BY_PLAYBACK: AtomicBool = AtomicBool::new(false);
@@ -40,8 +43,23 @@ pub fn show() {
     set_mapped(true);
 }
 
+/// Pauses first, so the last frame is not decoded into a surface that is about
+/// to be unmapped.
 pub fn hide() {
+    if on_hide(jfn_playback::visibility_sink::video_playing()) == PlaybackAction::Pause {
+        jfn_playback::sink_core::execute(jfn_playback::sink_core::MediaCommand::Pause);
+    }
     set_mapped(false);
+}
+
+/// Video started or resumed. Leaves `raised_by_playback` alone rather than
+/// setting it: the flag already records whether the window was the user's or
+/// playback's, and resuming does not change whose it is. Setting it here would
+/// make a window the user had open before hiding vanish when playback ends.
+pub fn handle_video_resumed() {
+    if on_video_resumed(hidden()) == VisibilityAction::Show {
+        set_mapped(true);
+    }
 }
 
 pub fn toggle() {
