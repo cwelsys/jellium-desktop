@@ -98,7 +98,6 @@ pub(crate) struct RootShared {
     commands_rx: Receiver<WindowCommand>,
     pending_fs: AtomicU8,
     maximized: AtomicBool,
-    hidden: AtomicBool,
     pending_bg: AtomicU32,
     pending_present: AtomicBool,
     /// Protocol id of the most recent menu popup `wl_surface`, overwritten by
@@ -139,7 +138,6 @@ impl RootShared {
             commands_rx,
             pending_fs: AtomicU8::new(FS_NONE),
             maximized: AtomicBool::new(false),
-            hidden: AtomicBool::new(false),
             pending_bg: AtomicU32::new(0),
             pending_present: AtomicBool::new(false),
             menu_surface_id: AtomicU32::new(0),
@@ -252,10 +250,6 @@ impl RootShared {
         self.send(WindowCommand::SetVisible(visible));
     }
 
-    pub(crate) fn hidden(&self) -> bool {
-        self.hidden.load(Ordering::Acquire)
-    }
-
     pub(crate) fn set_background_color(&self, r: u8, g: u8, b: u8) {
         let rgb = (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
         self.pending_bg.store(BG_SET | rgb, Ordering::Release);
@@ -349,7 +343,7 @@ struct RootState {
     present: Option<Presented>,
     scale_discovery: ScaleDiscovery,
     pre_fs_maximized: bool,
-    remap_pending: bool,
+    remap: Remap,
     stop: Arc<AtomicBool>,
 }
 
@@ -391,10 +385,17 @@ use floating_restore::FloatingRestore;
 mod present_cap {
     use super::WindowConfigure;
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) struct Presented(());
 
     pub(super) fn acked(_: &WindowConfigure) -> Presented {
+        Presented(())
+    }
+
+    /// The tests exercise the state machines that route the token, not the ack
+    /// itself, so they need one without a `WindowConfigure` to ack.
+    #[cfg(test)]
+    pub(super) fn token_for_test() -> Presented {
         Presented(())
     }
 }
@@ -521,6 +522,90 @@ mod presentation {
 }
 use presentation::{ScaleDiscovery, resolve_logical_size};
 
+/// Bookkeeping for the unmap/re-map cycle that hide and show drive.
+///
+/// Hiding attaches a null buffer, which unmaps the toplevel; showing commits
+/// the surface roleless again. What the compositor does in between is not
+/// fixed:
+/// - It answers the unmap with nothing. The show commit is then an initial
+///   commit, a configure follows, and that configure re-maps the window.
+/// - It answers the unmap with a configure. SCTK acks that configure before the
+///   handler sees it, so the surface already counts as configured and the show
+///   commit — which attaches no buffer — leaves the compositor nothing to
+///   answer. No second configure arrives, ever.
+///
+/// The size such a configure carries is the unmap's, zero or stale, and must
+/// never reach the geometry publish or the saved window size. So the size is
+/// dropped and the ack is remembered: a show that already holds one re-maps on
+/// the spot instead of waiting for a configure that is not coming.
+mod remap {
+    use super::Presented;
+
+    /// What [`super::RootState::configure`] may do with the configure it was
+    /// handed.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum OnConfigure {
+        /// Publish the geometry and present.
+        Publish,
+        /// Publish, and first re-attach the background the unmap detached:
+        /// this configure completes a show.
+        Remap,
+        /// Unmapped. Keep the ack, drop the size.
+        Withhold,
+    }
+
+    /// What `set_window_visible` must do to bring the toplevel back.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum OnShow {
+        /// The compositor still owes a configure; re-map when it lands.
+        AwaitConfigure,
+        /// A configure was acked while hidden and none is coming; re-map now,
+        /// on the ack it carries.
+        RemapNow(Presented),
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(super) struct Remap {
+        hidden: bool,
+        /// A configure acked while hidden, withheld from the geometry publish.
+        held: Option<Presented>,
+        /// A show is waiting on the configure it asked for.
+        awaiting: bool,
+    }
+
+    impl Remap {
+        pub(super) fn hide(&mut self) {
+            *self = Self {
+                hidden: true,
+                held: None,
+                awaiting: false,
+            };
+        }
+
+        pub(super) fn show(&mut self) -> OnShow {
+            self.hidden = false;
+            if let Some(acked) = self.held.take() {
+                return OnShow::RemapNow(acked);
+            }
+            self.awaiting = true;
+            OnShow::AwaitConfigure
+        }
+
+        pub(super) fn configure(&mut self, acked: Presented) -> OnConfigure {
+            if self.hidden {
+                self.held = Some(acked);
+                return OnConfigure::Withhold;
+            }
+            if std::mem::take(&mut self.awaiting) {
+                OnConfigure::Remap
+            } else {
+                OnConfigure::Publish
+            }
+        }
+    }
+}
+use remap::{OnConfigure, OnShow, Remap};
+
 impl RootState {
     fn resolve_logical(&self) -> Option<crate::window_state::WindowSize> {
         resolve_logical_size(
@@ -536,12 +621,13 @@ impl RootState {
     /// event callback, so it must never block — scale discovery is only
     /// requested here and serviced by the root loop between dispatch batches.
     fn try_present(&mut self) {
-        let step = presentation::plan(presentation::Inputs {
+        let inputs = presentation::Inputs {
             mapped: self.present.is_some(),
             pending_configure: self.pending_configure.is_some(),
             scale_known: self.rt.window().known_scale().is_some(),
             size: self.resolve_logical(),
-        });
+        };
+        let step = presentation::plan(inputs);
         match step {
             presentation::Step::Wait => {}
             presentation::Step::DiscoverScale => {
@@ -661,6 +747,16 @@ impl RootState {
             vp.set_destination(w, h);
         }
         crate::wl_state::damage_all(self.surface());
+    }
+
+    /// Re-attach the background the unmap detached, so the commit that follows
+    /// carries a buffer and maps the toplevel again.
+    fn finish_remap(&mut self) {
+        self.attach_background();
+        crate::wl_state::damage_all(self.surface());
+        // set_window_visible already asserted visible=true unconditionally;
+        // re-assert the real suspended state in case it raced ahead of it.
+        crate::window_state::feed_suspended(self.suspended);
     }
 
     fn attach_background(&self) {
@@ -799,21 +895,37 @@ fn apply_command(state: &mut RootState, cmd: WindowCommand) {
 }
 
 /// A null-buffer commit unmaps the toplevel but keeps the `wl_surface` alive,
-/// so mpv's video subsurface and the CEF overlay layers stay parented. Showing
-/// is the roleless commit again, to elicit a fresh configure.
+/// so mpv's video subsurface and the CEF overlay layers stay parented. How the
+/// window comes back depends on whether the compositor already answered the
+/// unmap with a configure — see [`remap`].
 fn set_window_visible(state: &mut RootState, visible: bool) {
     let surface = state.window.wl_surface().clone();
-    state.rt.root().hidden.store(!visible, Ordering::Release);
-    // Commits outside the present latch, like the boot-time roleless commit:
-    // neither branch attaches new content, so a same-tick latch commit can't race it.
-    if visible {
-        state.remap_pending = true;
-        surface.commit();
-    } else {
+    // Ahead of the re-map, so the suspended state `finish_remap` re-asserts
+    // lands last: both calls drive the same sink.
+    jfn_playback::lifecycle::jfn_lifecycle_set_visible(visible);
+    if !visible {
+        state.remap.hide();
+        // Commits outside the present latch, like the boot-time roleless
+        // commit: no new content is attached, so a same-tick latch commit
+        // can't race it.
         surface.attach(None, 0, 0);
         surface.commit();
+        return;
     }
-    jfn_playback::lifecycle::jfn_lifecycle_set_visible(visible);
+    match state.remap.show() {
+        // The surface is unconfigured, so this roleless commit is an initial
+        // commit and the configure it draws completes the re-map.
+        OnShow::AwaitConfigure => {
+            surface.commit();
+        }
+        // The unmap's configure was acked already, so the compositor owes
+        // nothing and a commit would draw no reply. Re-map on the held ack.
+        OnShow::RemapNow(acked) => {
+            state.pending_configure = Some(acked);
+            state.finish_remap();
+            state.try_present();
+        }
+    }
 }
 
 // Fullscreen requests posted here and applied on the root thread by
@@ -1340,7 +1452,7 @@ pub(crate) fn ensure_started(rt: &'static WlRuntime) {
         present: None,
         scale_discovery: ScaleDiscovery::Idle,
         pre_fs_maximized: false,
-        remap_pending: false,
+        remap: Remap::default(),
         stop: stop.clone(),
     };
 
@@ -1579,10 +1691,15 @@ impl WindowHandler for RootState {
         configure: WindowConfigure,
         _: u32,
     ) {
-        let (w, h) = configure.new_size;
-        if self.rt.root().hidden() {
+        let acked = present_cap::acked(&configure);
+        let step = self.remap.configure(acked);
+        if step == OnConfigure::Withhold {
+            // Unmapped: `remap` keeps the ack, but the size is the unmap's —
+            // zero or stale — and must reach neither the geometry publish nor
+            // the saved window size.
             return;
         }
+        let (w, h) = configure.new_size;
         self.pending_w = w.and_then(logical_extent);
         self.pending_h = h.and_then(logical_extent);
 
@@ -1617,16 +1734,11 @@ impl WindowHandler for RootState {
             }
         }
 
-        if self.remap_pending {
-            self.remap_pending = false;
-            self.attach_background();
-            crate::wl_state::damage_all(self.surface());
-            // set_window_visible already asserted visible=true unconditionally;
-            // re-assert the real suspended state in case it raced ahead of it.
-            crate::window_state::feed_suspended(self.suspended);
+        if step == OnConfigure::Remap {
+            self.finish_remap();
         }
 
-        self.pending_configure = Some(present_cap::acked(&configure));
+        self.pending_configure = Some(acked);
         self.try_present();
     }
 }
@@ -1984,11 +2096,66 @@ mod model_tests {
 #[cfg(test)]
 mod tests {
     use super::popup_place::Placed;
+    use super::present_cap::token_for_test;
     use super::presentation::{Inputs, ScaleDiscovery, Step, plan};
+    use super::remap::{OnConfigure, OnShow, Remap};
     use super::resolve_logical_size;
     use crate::window_state::{WindowMode, WindowSize};
     use jfn_platform_abi::MenuPlacement;
     use std::num::NonZeroI32;
+
+    #[test]
+    fn a_silent_unmap_remaps_on_the_configure_the_show_elicits() {
+        // Compositor answers the unmap with nothing, so the show commit is an
+        // initial commit and the configure it elicits completes the re-map.
+        let mut r = Remap::default();
+        r.hide();
+        assert_eq!(r.show(), OnShow::AwaitConfigure);
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Remap);
+    }
+
+    #[test]
+    fn a_configure_delivered_while_hidden_never_publishes_geometry() {
+        // It carries the unmap's zero or stale size; publishing it would
+        // overwrite the saved window geometry.
+        let mut r = Remap::default();
+        r.hide();
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Withhold);
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Withhold);
+    }
+
+    #[test]
+    fn a_configure_answered_at_unmap_remaps_without_waiting() {
+        // The ack already happened, so the show commit elicits no second
+        // configure. Waiting for one strands the window off-screen for good.
+        let mut r = Remap::default();
+        r.hide();
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Withhold);
+        assert_eq!(r.show(), OnShow::RemapNow(token_for_test()));
+    }
+
+    #[test]
+    fn a_held_configure_does_not_survive_the_show_that_consumed_it() {
+        let mut r = Remap::default();
+        r.hide();
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Withhold);
+        assert_eq!(r.show(), OnShow::RemapNow(token_for_test()));
+        // Second cycle, silent this time: the spent hold must not short it out.
+        r.hide();
+        assert_eq!(r.show(), OnShow::AwaitConfigure);
+    }
+
+    #[test]
+    fn a_configure_while_shown_publishes_without_remapping() {
+        let mut r = Remap::default();
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Publish);
+        // Only the configure that completes a show re-attaches; the resizes
+        // after it are ordinary publishes.
+        r.hide();
+        assert_eq!(r.show(), OnShow::AwaitConfigure);
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Remap);
+        assert_eq!(r.configure(token_for_test()), OnConfigure::Publish);
+    }
 
     fn place(x: i32) -> MenuPlacement {
         MenuPlacement {
