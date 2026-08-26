@@ -75,32 +75,47 @@ pub fn jfn_cef_set_disable_gpu_compositing(disable: bool) {
 }
 
 pub fn jfn_cef_set_platform_switches(backend: DisplayBackend) {
-    state::with_config(|c| match backend {
-        DisplayBackend::Wayland => {
-            c.pending_switches.push(state::PendingSwitch::with_value(
-                "ozone-platform",
-                "wayland",
-            ));
-            // OSR honors GetScreenInfo device_scale_factor only without the
-            // fractional-scale protocol.
-            c.pending_switches.push(state::PendingSwitch::with_value(
-                "disable-features",
-                "WaylandFractionalScaleV1",
-            ));
+    state::with_config(|c| {
+        // Hiding the window backgrounds the renderer, and Chromium throttles
+        // background timers to roughly one tick a minute after five minutes.
+        // jellyfin-web's websocket keepalive is a timer, so throttled it lets
+        // the server drop the session and the app stops being castable — the
+        // failure the tray exists to prevent. `WasHidden` still pauses
+        // rendering, so this buys timers, not frames.
+        for sw in [
+            "disable-background-timer-throttling",
+            "disable-backgrounding-occluded-windows",
+            "disable-renderer-backgrounding",
+        ] {
+            c.pending_switches.push(state::PendingSwitch::flag(sw));
         }
-        DisplayBackend::X11 => {
-            c.pending_switches
-                .push(state::PendingSwitch::with_value("ozone-platform", "x11"));
+        match backend {
+            DisplayBackend::Wayland => {
+                c.pending_switches.push(state::PendingSwitch::with_value(
+                    "ozone-platform",
+                    "wayland",
+                ));
+                // OSR honors GetScreenInfo device_scale_factor only without the
+                // fractional-scale protocol.
+                c.pending_switches.push(state::PendingSwitch::with_value(
+                    "disable-features",
+                    "WaylandFractionalScaleV1",
+                ));
+            }
+            DisplayBackend::X11 => {
+                c.pending_switches
+                    .push(state::PendingSwitch::with_value("ozone-platform", "x11"));
+            }
+            DisplayBackend::MacOS => {
+                c.pending_switches
+                    .push(state::PendingSwitch::flag("single-process"));
+                c.pending_switches
+                    .push(state::PendingSwitch::flag("use-mock-keychain"));
+                c.pending_switches
+                    .push(state::PendingSwitch::with_value("password-store", "basic"));
+            }
+            DisplayBackend::Windows => {}
         }
-        DisplayBackend::MacOS => {
-            c.pending_switches
-                .push(state::PendingSwitch::flag("single-process"));
-            c.pending_switches
-                .push(state::PendingSwitch::flag("use-mock-keychain"));
-            c.pending_switches
-                .push(state::PendingSwitch::with_value("password-store", "basic"));
-        }
-        DisplayBackend::Windows => {}
     });
 }
 
