@@ -52,6 +52,7 @@ fn dispatch(outs: Vec<IngestOut>) -> u8 {
             IngestOut::Input(i) => post_input(i),
             IngestOut::WindowExtentChanged => jfn_platform_abi::notify_window_changed(),
             IngestOut::Shutdown => flags |= INGEST_FLAG_SHUTDOWN,
+            IngestOut::CloseRequested => crate::shutdown::jfn_close_requested(),
         }
     }
     flags

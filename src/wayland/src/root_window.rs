@@ -1566,7 +1566,7 @@ impl OutputHandler for RootState {
 
 impl WindowHandler for RootState {
     fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
-        jfn_playback::shutdown::jfn_shutdown_initiate();
+        jfn_playback::shutdown::jfn_close_requested();
     }
 
     /// SCTK has already acked the serial and coalesced the toplevel size,

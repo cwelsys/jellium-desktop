@@ -116,13 +116,14 @@ fn log_mpv_versions() {
     }
 }
 
-/// Restores the builtin CLOSE_WIN -> quit binding that
-/// `input-default-bindings=no` drops. Async: the boot path never parks on
-/// mpv's core.
+/// Restores the builtin CLOSE_WIN binding that `input-default-bindings=no`
+/// drops, routed through the close policy (a script message) instead of a
+/// direct `quit` so close-to-tray can absorb it. Async: the boot path never
+/// parks on mpv's core.
 fn install_mpv_close_binding() {
     let kb = cs("keybind");
     let name = cs("CLOSE_WIN");
-    let action = cs("quit");
+    let action = cs("script-message jfn-close");
     let argv = [kb.as_ptr(), name.as_ptr(), action.as_ptr()];
     unsafe { jfn_mpv::api::jfn_mpv_command_async(argv.as_ptr(), argv.len()) };
 }
@@ -383,6 +384,8 @@ fn start_playback_coordination(instance: &Instance) -> bool {
     ));
     #[cfg(target_os = "linux")]
     jfn_instance_ipc::jfn::set_show_handler(Some(crate::visibility::show));
+    #[cfg(target_os = "linux")]
+    jfn_playback::shutdown::jfn_close_set_handler(Some(crate::visibility::handle_close));
 
     plat().media_session().start(instance);
 
@@ -680,8 +683,8 @@ fn run_app(instance: &Instance, opts: StartupOptions) -> c_int {
     // override and gates boot readiness on it.
     jfn_mpv::api::jfn_mpv_request_background_color();
 
-    // input-default-bindings=no drops the builtin CLOSE_WIN -> quit binding;
-    // the WM close button needs it back.
+    // input-default-bindings=no drops the builtin CLOSE_WIN binding; the WM
+    // close button needs it back.
     install_mpv_close_binding();
 
     wake_mpv_on_window_change();

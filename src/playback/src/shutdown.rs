@@ -21,6 +21,7 @@ use jfn_wake_event::WakeEvent;
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 static HANDLER: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 static WAKERS: Mutex<Vec<&'static WakeEvent>> = Mutex::new(Vec::new());
+static CLOSE: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 
 /// Returns true if [`jfn_shutdown_initiate`] has been called at least once.
 pub fn jfn_shutting_down() -> bool {
@@ -71,5 +72,32 @@ pub fn jfn_shutdown_initiate() {
     if !h.is_null() {
         let f: fn() = unsafe { std::mem::transmute(h) };
         f();
+    }
+}
+
+/// Install (or clear, with `None`) the close policy. The handler returns
+/// true if it absorbed the close. Same inline-execution contract as
+/// [`jfn_shutdown_set_handler`]: signal or post, never block.
+pub fn jfn_close_set_handler(handler: Option<fn() -> bool>) {
+    let ptr = handler
+        .map(|f| f as *mut ())
+        .unwrap_or(std::ptr::null_mut());
+    CLOSE.store(ptr, Ordering::Release);
+}
+
+/// Window button, compositor close, or mpv's `CLOSE_WIN`. Shuts down if no
+/// policy is installed or it declined.
+pub fn jfn_close_requested() {
+    let ptr = CLOSE.load(Ordering::Acquire);
+    let absorbed = if ptr.is_null() {
+        false
+    } else {
+        // SAFETY: only ever set from a `fn() -> bool` in
+        // `jfn_close_set_handler`; fn pointers have static lifetime.
+        let f = unsafe { std::mem::transmute::<*mut (), fn() -> bool>(ptr) };
+        f()
+    };
+    if !absorbed {
+        jfn_shutdown_initiate();
     }
 }

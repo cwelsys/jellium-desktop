@@ -67,7 +67,7 @@ pub fn handle_window_op(name: &str, args: Option<&ListValue>, browser: Option<&m
                 jfn_platform_abi::get().window_start_resize(list_int(a, 0));
             }
         }
-        "windowClose" => jfn_playback::shutdown::jfn_shutdown_initiate(),
+        "windowClose" => jfn_playback::shutdown::jfn_close_requested(),
         "csdReady" => push_csd_state(browser),
         _ => {}
     }
