@@ -24,19 +24,24 @@ pub fn tray_available() -> bool {
     TRAY_AVAILABLE.load(Ordering::Acquire)
 }
 
+/// Maps or unmaps the window, calling into the platform only when `HIDDEN`
+/// actually changes so redundant show/hide calls never reach it.
+fn set_mapped(visible: bool) {
+    let new_hidden = !visible;
+    if HIDDEN.swap(new_hidden, Ordering::AcqRel) != new_hidden {
+        plat().window_set_visible(visible);
+    }
+}
+
 /// Clears `raised_by_playback`: a window the user asked for stays up when
 /// playback ends.
 pub fn show() {
     RAISED_BY_PLAYBACK.store(false, Ordering::Release);
-    if HIDDEN.swap(false, Ordering::AcqRel) {
-        plat().window_set_visible(true);
-    }
+    set_mapped(true);
 }
 
 pub fn hide() {
-    if !HIDDEN.swap(true, Ordering::AcqRel) {
-        plat().window_set_visible(false);
-    }
+    set_mapped(false);
 }
 
 pub fn toggle() {
@@ -61,14 +66,8 @@ pub fn handle_video_mode(active: bool) {
     let (action, raised) =
         on_video_mode(active, hidden(), RAISED_BY_PLAYBACK.load(Ordering::Acquire));
     match action {
-        VisibilityAction::Show => {
-            HIDDEN.store(false, Ordering::Release);
-            plat().window_set_visible(true);
-        }
-        VisibilityAction::Hide => {
-            HIDDEN.store(true, Ordering::Release);
-            plat().window_set_visible(false);
-        }
+        VisibilityAction::Show => set_mapped(true),
+        VisibilityAction::Hide => set_mapped(false),
         VisibilityAction::Nothing => {}
     }
     RAISED_BY_PLAYBACK.store(raised, Ordering::Release);
