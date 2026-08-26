@@ -861,6 +861,8 @@ extern "C" fn h_idle_inhibit(level: u32) {
 }
 extern "C" fn h_theme_video_mode(active: bool) {
     jfn_color::theme::jfn_theme_color_set_video_mode(active);
+    #[cfg(target_os = "linux")]
+    crate::visibility::handle_video_mode(active);
 }
 extern "C" fn h_web_exec_js(js: *const c_char) {
     if !js.is_null() {
