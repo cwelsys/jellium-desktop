@@ -36,6 +36,19 @@
             };
 
             this.setVolume(this.getSavedVolume() * 100, false);
+
+            // Re-send the current slider value when the boost changes, so the
+            // new scale applies to a video already playing rather than waiting
+            // for the next slider move.
+            this._onSettingChanged = (e) => {
+                if (e.detail?.key === 'volumeBoost') this.setVolume(this._volume, false);
+            };
+            window.addEventListener('jmp-setting-changed', this._onSettingChanged);
+        }
+
+        // Subclass destroy() must call this.
+        destroyBase() {
+            window.removeEventListener('jmp-setting-changed', this._onSettingChanged);
         }
 
         // Signal management
@@ -185,6 +198,14 @@
             return this.appSettings.get('volume') || 1;
         }
 
+        // What the slider's 100% maps to at the mpv end. Read live so a change
+        // in settings takes effect without a restart. Off, empty, and garbage
+        // all fall back to unity.
+        volumeScale() {
+            const boost = Number(window.jmpInfo?.settings?.audio?.volumeBoost);
+            return Number.isFinite(boost) && boost > 0 ? boost / 100 : 1;
+        }
+
         // Volume
         setVolume(val, save = true) {
             val = Number(val);
@@ -194,7 +215,10 @@
                     this.appSettings.set('volume', (val || 100) / 100);
                     this.events.trigger(this, 'volumechange');
                 }
-                window.api.player.setVolume(val);
+                // _volume stays the slider's own 0-100 value; only what
+                // reaches mpv is scaled, so the UI and the saved setting are
+                // unaffected by the boost.
+                window.api.player.setVolume(Math.round(val * this.volumeScale()));
             }
         }
 

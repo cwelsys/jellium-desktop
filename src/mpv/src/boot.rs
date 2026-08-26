@@ -15,6 +15,11 @@ use std::sync::{Arc, OnceLock};
 use crate::handle::Handle;
 use crate::sys;
 
+/// Ceiling for the `volume` property, raised from mpv's own default of 130 so
+/// the web layer's volume-boost setting has somewhere to go. The select in
+/// `src/web/native-shim.js` must not offer a percentage above this.
+pub const VOLUME_MAX: u32 = 200;
+
 /// Display backend in use for this process.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,6 +127,12 @@ fn apply_defaults(
     set("osd-level", "0")?;
     set("osc", "no")?;
     set("display-tags", "")?;
+
+    // Headroom for the volume-boost setting. mpv's own default caps at 130,
+    // which would silently clamp a boosted slider. Raising the ceiling
+    // changes nothing on its own — the web layer still sends 0-100 unless
+    // the user opts in.
+    set("volume-max", &VOLUME_MAX.to_string())?;
 
     // Track selection is owned by Jellyfin. Disable mpv's heuristic
     // so unspecified tracks stay disabled instead of being auto-picked

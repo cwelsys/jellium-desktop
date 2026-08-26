@@ -91,6 +91,7 @@
         }
 
         destroy() {
+            this.destroyBase();
             window.api.player.stop();
             this.disconnectSignals();
             this._duration = undefined;

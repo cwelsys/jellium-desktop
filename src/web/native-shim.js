@@ -96,7 +96,8 @@
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
                 audioExclusive: _savedSettings.audioExclusive || false,
-                audioChannels: _savedSettings.audioChannels || ''
+                audioChannels: _savedSettings.audioChannels || '',
+                volumeBoost: _savedSettings.volumeBoost || ''
             },
             transcode: {
                 forceTranscoding: !!_savedSettings.forceTranscoding
@@ -122,6 +123,14 @@
                     { value: 'stereo', title: 'Stereo' },
                     { value: '5.1', title: '5.1 Surround' },
                     { value: '7.1', title: '7.1 Surround' }
+                ]},
+                // Ceiling must stay at or below jfn_mpv::boot::VOLUME_MAX,
+                // which is what mpv boots volume-max with.
+                { key: 'volumeBoost', displayName: 'Volume Boost', help: 'What the volume slider reads at 100%. Above 100% the extra gain is digital, so loud sources can clip on peaks. For quiet dialogue against loud effects, an mpv.conf compressor works better than gain.', options: [
+                    { value: '', title: 'Off (100%)' },
+                    { value: '125', title: '125%' },
+                    { value: '150', title: '150%' },
+                    { value: '200', title: '200%' }
                 ]}
             ],
             transcode: [

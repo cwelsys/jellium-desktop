@@ -168,6 +168,14 @@
         return widget;
     }
 
+    // Persist a setting and announce it, so consumers that can apply a change
+    // without a restart (the player's volume scale) hear about it.
+    function applySetting(section, key, value) {
+        window.jmpInfo.settings[section][key] = value;
+        window.api.settings.setValue(section, key, value);
+        window.dispatchEvent(new CustomEvent('jmp-setting-changed', { detail: { section, key, value } }));
+    }
+
     // Populate the settings form with controls driven by window.jmpInfo.
     function buildSettingsForm(form) {
         const jmpInfo = window.jmpInfo;
@@ -216,8 +224,7 @@
                         // A null option value can't round-trip through control.value (DOM strings).
                         const selected = setting.options[control.selectedIndex];
                         const value = typeof selected === 'string' ? selected : selected.value;
-                        jmpInfo.settings[section][setting.key] = value;
-                        window.api.settings.setValue(section, setting.key, value);
+                        applySetting(section, setting.key, value);
                     });
                     container.appendChild(control);
                     if (setting.help) {
@@ -235,10 +242,7 @@
                     const widget = renderCodecList({
                         enabled: values[setting.key],
                         all: jmpInfo[setting.codecListSource],
-                        onChange: (enabledOrdered) => {
-                            jmpInfo.settings[section][setting.key] = enabledOrdered;
-                            window.api.settings.setValue(section, setting.key, enabledOrdered);
-                        }
+                        onChange: (enabledOrdered) => applySetting(section, setting.key, enabledOrdered)
                     });
                     container.appendChild(widget);
                     if (setting.help) {
@@ -266,8 +270,7 @@
                         if (setting.maxLength) control.maxLength = setting.maxLength;
                     }
                     control.addEventListener('change', () => {
-                        jmpInfo.settings[section][setting.key] = control.value;
-                        window.api.settings.setValue(section, setting.key, control.value);
+                        applySetting(section, setting.key, control.value);
                     });
                     container.appendChild(control);
                     if (setting.help) {
@@ -286,8 +289,7 @@
                     control.setAttribute('is', 'emby-checkbox');
                     control.checked = !!values[setting.key];
                     control.addEventListener('change', () => {
-                        jmpInfo.settings[section][setting.key] = control.checked;
-                        window.api.settings.setValue(section, setting.key, control.checked);
+                        applySetting(section, setting.key, control.checked);
                     });
                     lbl.appendChild(control);
                     const checkSpan = document.createElement('span');

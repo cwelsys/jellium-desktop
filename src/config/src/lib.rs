@@ -20,6 +20,12 @@ use std::thread::{self, JoinHandle};
 const DEVICE_NAME_MAX: usize = 64;
 const HWDEC_DEFAULT: &str = "no";
 
+/// True when the stored boost is a real one, so unity and the empty default
+/// stay absent from both settings.json and the web UI blob.
+fn is_boosting(v: &str) -> bool {
+    !v.is_empty() && v != "100"
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
     pub x: i32,
@@ -53,6 +59,9 @@ struct SettingsData {
     hwdec: String,
     audio_passthrough: String,
     audio_channels: String,
+    /// Percent the UI's 0-100 volume slider maps onto; empty or "100" is
+    /// unity. Stringly-typed like the other select-backed settings.
+    volume_boost: String,
     log_level: String,
     device_name: String,
     window: JfnWindowGeometry,
@@ -72,6 +81,7 @@ impl Default for SettingsData {
             hwdec: String::new(),
             audio_passthrough: String::new(),
             audio_channels: String::new(),
+            volume_boost: String::new(),
             log_level: String::new(),
             device_name: String::new(),
             window: JfnWindowGeometry::default(),
@@ -131,6 +141,9 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     audio_channels: Option<String>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    volume_boost: Option<String>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     disable_gpu_compositing: Option<bool>,
@@ -215,6 +228,9 @@ struct CliSettings<'a> {
     audio_channels: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    volume_boost: Option<&'a str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     disable_gpu_compositing: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,6 +266,9 @@ impl SettingsData {
         }
         if let Some(v) = file.audio_channels {
             self.audio_channels = v;
+        }
+        if let Some(v) = file.volume_boost {
+            self.volume_boost = v;
         }
         if let Some(v) = file.log_level {
             self.log_level = v;
@@ -325,6 +344,7 @@ impl SettingsData {
                 .then(|| self.audio_passthrough.clone()),
             audio_exclusive: self.audio_exclusive.then_some(true),
             audio_channels: (!self.audio_channels.is_empty()).then(|| self.audio_channels.clone()),
+            volume_boost: is_boosting(&self.volume_boost).then(|| self.volume_boost.clone()),
             disable_gpu_compositing: self.disable_gpu_compositing.then_some(true),
             transparent_titlebar: (!self.transparent_titlebar).then_some(false),
             log_level: (!self.log_level.is_empty()).then(|| self.log_level.clone()),
@@ -344,6 +364,7 @@ impl SettingsData {
             audio_exclusive: self.audio_exclusive.then_some(true),
             audio_channels: (!self.audio_channels.is_empty())
                 .then_some(self.audio_channels.as_str()),
+            volume_boost: is_boosting(&self.volume_boost).then_some(self.volume_boost.as_str()),
             disable_gpu_compositing: self.disable_gpu_compositing.then_some(true),
             transparent_titlebar: (!self.transparent_titlebar).then_some(false),
             log_level: (!self.log_level.is_empty()).then_some(self.log_level.as_str()),
@@ -534,6 +555,7 @@ string_accessors!(server_url, set_server_url, server_url);
 string_accessors!(hwdec, set_hwdec, hwdec);
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
+string_accessors!(volume_boost, set_volume_boost, volume_boost);
 string_accessors!(log_level, set_log_level, log_level);
 
 pub fn device_name() -> String {
@@ -718,6 +740,7 @@ mod tests {
             hwdec: "vaapi".into(),
             audio_passthrough: "eac3".into(),
             audio_channels: "stereo".into(),
+            volume_boost: "200".into(),
             log_level: "debug".into(),
             device_name: "box".into(),
             window: super::JfnWindowGeometry {
@@ -755,6 +778,7 @@ mod tests {
                 "audioPassthrough",
                 "audioExclusive",
                 "audioChannels",
+                "volumeBoost",
                 "disableGpuCompositing",
                 "transparentTitlebar",
                 "logLevel",
@@ -767,6 +791,30 @@ mod tests {
         );
         assert!(text.contains(r#""windowDecorations":"serverThemed""#));
         assert!(text.contains(r#""windowScale":1.5"#));
+    }
+
+    #[test]
+    fn volume_boost_defaults_off_and_round_trips() {
+        assert_eq!(SettingsData::default().volume_boost, "");
+        assert_eq!(loaded(r#"{"volumeBoost":"150"}"#).volume_boost, "150");
+        assert_eq!(loaded(r#"{"serverUrl":"http://host"}"#).volume_boost, "");
+
+        let data = SettingsData {
+            volume_boost: "200".into(),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""volumeBoost":"200""#));
+    }
+
+    #[test]
+    fn volume_boost_at_unity_is_absent_on_save() {
+        let data = SettingsData {
+            volume_boost: "100".into(),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(!text.contains("volumeBoost"));
     }
 
     #[test]
@@ -823,6 +871,7 @@ mod tests {
     fn cli_json_emits_the_web_ui_contract() {
         let data = SettingsData {
             hwdec: "vaapi".into(),
+            volume_boost: "150".into(),
             transparent_titlebar: false,
             device_name: "box".into(),
             ..SettingsData::default()
@@ -832,6 +881,7 @@ mod tests {
             keys(&text),
             [
                 "hwdec",
+                "volumeBoost",
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
