@@ -37,6 +37,7 @@ publish = false
 
 [workspace.dependencies]
 arc-swap = "1"
+base64 = "0.23"
 calloop = "0.14"
 calloop-wayland-source = "0.4"
 cef = { version = "=151", default-features = false }

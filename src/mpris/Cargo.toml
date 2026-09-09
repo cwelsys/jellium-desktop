@@ -10,8 +10,10 @@ crate-type = ["rlib"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 async-io = "2"
+base64.workspace = true
 crossbeam-channel.workspace = true
 jfn-mpv = { path = "../mpv" }
+jfn-paths = { path = "../paths" }
 jfn-platform-abi = { path = "../platform_abi" }
 jfn-playback = { path = "../playback" }
 parking_lot.workspace = true

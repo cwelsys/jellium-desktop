@@ -8,11 +8,16 @@
 //! callback.
 
 use async_io::block_on;
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use parking_lot::{Mutex, RwLock};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
 use zbus::blocking::Connection;
@@ -71,6 +76,67 @@ fn insert_value(m: &mut HashMap<String, OwnedValue>, key: &str, v: Value<'_>) {
         }
         Err(e) => eprintln!("mpris: encode {key}: {e}"),
     }
+}
+
+static LAST_ART_FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
+static ART_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn decode_data_uri(uri: &str) -> Option<(Vec<u8>, String)> {
+    let (header, payload) = uri.split_once(',')?;
+    let media_type = header.strip_prefix("data:")?.strip_suffix(";base64")?;
+    let bytes = BASE64_STANDARD.decode(payload).ok()?;
+    let subtype = media_type.rsplit('/').next().unwrap_or_default();
+    let ext = if !subtype.is_empty() && subtype.chars().all(|c| c.is_ascii_alphanumeric()) {
+        subtype.to_ascii_lowercase()
+    } else {
+        "img".to_string()
+    };
+    Some((bytes, ext))
+}
+
+fn file_url(path: &Path) -> String {
+    let mut url = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                url.push(char::from(byte));
+            }
+            _ => url.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    url
+}
+
+/// Most MPRIS clients hand `mpris:artUrl` straight to an image loader that
+/// only understands `file:`/`http(s):`, so the artwork is published as a file,
+/// never as the `data:` URI it arrives in. The name changes every time so
+/// clients that cache by URL pick new art up; the file it replaces is removed.
+fn art_file_uri(data_uri: &str) -> String {
+    if data_uri.is_empty() {
+        return String::new();
+    }
+    let Some((bytes, ext)) = decode_data_uri(data_uri) else {
+        eprintln!("mpris: album art is not a base64 data URI");
+        return String::new();
+    };
+
+    let dir = jfn_paths::cache_dir().join("art");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("mpris: create {}: {e}", dir.display());
+        return String::new();
+    }
+    let seq = ART_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("art-{}-{seq}.{ext}", std::process::id()));
+    if let Err(e) = fs::write(&path, &bytes) {
+        eprintln!("mpris: write {}: {e}", path.display());
+        return String::new();
+    }
+
+    let url = file_url(&path);
+    if let Some(stale) = LAST_ART_FILE.lock().replace(path) {
+        let _ = fs::remove_file(stale);
+    }
+    url
 }
 
 fn metadata_to_dict(meta: &MediaMetadata) -> HashMap<String, OwnedValue> {
@@ -389,7 +455,7 @@ fn handle_event(
                 }
             }
             PlaybackEventKind::ArtworkChanged => {
-                s.content.metadata.art_data_uri = ev.artwork_uri.clone();
+                s.content.metadata.art_data_uri = art_file_uri(&ev.artwork_uri);
                 do_recompute = true;
             }
             PlaybackEventKind::QueueCapsChanged => {
@@ -548,6 +614,55 @@ mod tests {
         entries: impl IntoIterator<Item = (&'a str, Value<'a>)>,
     ) -> zbus::Result<Value<'static>> {
         Ok(Value::from(props(entries)?))
+    }
+
+    #[test]
+    fn data_uri_decodes_to_bytes_and_extension() {
+        assert_eq!(
+            decode_data_uri("data:image/png;base64,aGk="),
+            Some((b"hi".to_vec(), "png".to_string()))
+        );
+    }
+
+    #[test]
+    fn unusable_art_sources_are_rejected() {
+        assert_eq!(decode_data_uri("https://example.com/art.jpg"), None);
+        assert_eq!(decode_data_uri("data:image/png,raw"), None);
+        assert_eq!(decode_data_uri("data:image/png;base64,not base64"), None);
+    }
+
+    #[test]
+    fn compound_subtype_falls_back_to_generic_extension() {
+        assert_eq!(
+            decode_data_uri("data:image/svg+xml;base64,aGk="),
+            Some((b"hi".to_vec(), "img".to_string()))
+        );
+    }
+
+    #[test]
+    fn file_url_escapes_reserved_bytes() {
+        assert_eq!(
+            file_url(Path::new("/tmp/a b/art-1.jpg")),
+            "file:///tmp/a%20b/art-1.jpg"
+        );
+    }
+
+    #[test]
+    fn art_url_published_to_clients_is_never_a_data_uri() {
+        let dir = std::env::temp_dir().join(format!("jellium-art-test-{}", std::process::id()));
+        jfn_paths::set_cache_dir_override(dir.clone());
+
+        let art = art_file_uri("data:image/jpeg;base64,aGk=");
+        assert!(art.starts_with("file:///"), "{art}");
+        assert!(art.ends_with(".jpeg"), "{art}");
+
+        let written = LAST_ART_FILE
+            .lock()
+            .as_deref()
+            .and_then(|p| fs::read(p).ok());
+        assert_eq!(written, Some(b"hi".to_vec()));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
