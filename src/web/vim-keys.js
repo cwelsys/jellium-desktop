@@ -1,11 +1,13 @@
 (function () {
-    var HINT_CHARS = 'asdfghjkl';
+    var HINT_CHARS = 'sadfjklewcmpgh';
     var SCROLL_STEP = 60;
     var TARGETS = 'a[href], button, input:not([type=hidden]), select, textarea,' +
         '[role="button"], [role="link"], [data-action], [tabindex]:not([tabindex="-1"])';
+    var REVEALED = '.cardOverlayContainer, .cardOverlayButton, .cardOverlayFab';
 
     var host = null;
     var layer = null;
+    var revealStyle = null;
     var hints = [];
     var typed = '';
 
@@ -42,7 +44,8 @@
     }
 
     function labels(n) {
-        var width = Math.max(1, Math.ceil(Math.log(n) / Math.log(HINT_CHARS.length)));
+        var width = 1;
+        for (var cap = HINT_CHARS.length; cap < n; cap *= HINT_CHARS.length) width++;
         var out = [];
         for (var i = 0; i < n; i++) {
             var s = '';
@@ -65,25 +68,25 @@
         return st;
     }
 
-    function clipRect(el, cache) {
+    function clipRect(el, cache, skipOpacity) {
         var r = el.getBoundingClientRect();
         var left = r.left, top = r.top, right = r.right, bottom = r.bottom;
-        if (styleOf(el, cache).position !== 'fixed') {
-            for (var p = el.parentElement; p; p = p.parentElement) {
-                var st = styleOf(p, cache);
-                if (st.overflowX !== 'visible' || st.overflowY !== 'visible') {
-                    var pr = p.getBoundingClientRect();
-                    if (st.overflowX !== 'visible') {
-                        left = Math.max(left, pr.left);
-                        right = Math.min(right, pr.right);
-                    }
-                    if (st.overflowY !== 'visible') {
-                        top = Math.max(top, pr.top);
-                        bottom = Math.min(bottom, pr.bottom);
-                    }
+        var clipping = styleOf(el, cache).position !== 'fixed';
+        for (var p = el.parentElement; p; p = p.parentElement) {
+            var st = styleOf(p, cache);
+            if (!skipOpacity && (st.opacity === '0' || st.visibility === 'hidden')) return null;
+            if (clipping && (st.overflowX !== 'visible' || st.overflowY !== 'visible')) {
+                var pr = p.getBoundingClientRect();
+                if (st.overflowX !== 'visible') {
+                    left = Math.max(left, pr.left);
+                    right = Math.min(right, pr.right);
                 }
-                if (st.position === 'fixed') break;
+                if (st.overflowY !== 'visible') {
+                    top = Math.max(top, pr.top);
+                    bottom = Math.min(bottom, pr.bottom);
+                }
             }
+            if (st.position === 'fixed') clipping = false;
         }
         return {
             left: Math.max(left, 0),
@@ -104,8 +107,11 @@
             var el = nodes[i];
             if (el.disabled) continue;
             var st = styleOf(el, cache);
-            if (st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') continue;
-            var box = clipRect(el, cache);
+            if (st.display === 'none') continue;
+            var revealed = el.closest ? !!el.closest(REVEALED) : false;
+            if (!revealed && (st.visibility === 'hidden' || st.opacity === '0')) continue;
+            var box = clipRect(el, cache, revealed);
+            if (!box) continue;
             var w = box.right - box.left;
             var h = box.bottom - box.top;
             if (w < 8 || h < 8) continue;
@@ -163,10 +169,27 @@
         if (shown === 0) clearHints();
     }
 
+    function reveal(on) {
+        if (on) {
+            if (revealStyle) return;
+            revealStyle = document.createElement('style');
+            revealStyle.textContent = '.cardOverlayContainer,.cardOverlayButton,.cardOverlayFab' +
+                '{opacity:1!important;visibility:visible!important;transition:none!important}';
+            (document.head || document.documentElement).appendChild(revealStyle);
+        } else if (revealStyle) {
+            revealStyle.remove();
+            revealStyle = null;
+        }
+    }
+
     function showHints() {
         clearHints();
+        reveal(true);
         var found = candidates();
-        if (!found.length) return;
+        if (!found.length) {
+            reveal(false);
+            return;
+        }
         buildHost();
         var names = labels(found.length);
         for (var i = 0; i < found.length; i++) {
@@ -185,6 +208,7 @@
     }
 
     function clearHints() {
+        reveal(false);
         if (!hints.length) return;
         hints = [];
         typed = '';
