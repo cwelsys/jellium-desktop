@@ -173,6 +173,7 @@ pub(crate) enum InjectedScript {
     ClientSettings,
     Csd,
     SelectMenu,
+    VimKeys,
 }
 
 impl InjectedScript {
@@ -186,6 +187,7 @@ impl InjectedScript {
             "client-settings.js" => Self::ClientSettings,
             "csd.js" => Self::Csd,
             "select-menu.js" => Self::SelectMenu,
+            "vim-keys.js" => Self::VimKeys,
             _ => return None,
         })
     }
@@ -200,6 +202,7 @@ impl InjectedScript {
             Self::ClientSettings => "client-settings.js",
             Self::Csd => "csd.js",
             Self::SelectMenu => "select-menu.js",
+            Self::VimKeys => "vim-keys.js",
         }
     }
 
@@ -250,6 +253,7 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::MpvAudioPlayer,
     InjectedScript::InputPlugin,
     InjectedScript::ClientSettings,
+    InjectedScript::VimKeys,
 ];
 const OVERLAY_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::GetSavedServerUrl,
