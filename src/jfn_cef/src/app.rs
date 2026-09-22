@@ -200,17 +200,13 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
-            jfn_logging::log(jfn_logging::CATEGORY_CEF, jfn_logging::LEVEL_INFO, "CEF context initialized");
+            jfn_logging::log(jfn_logging::Category::Cef, jfn_logging::Level::Info, "CEF context initialized");
             crate::resource::register();
-            // Optional C-side callback (kept for any future C++ context-init
-            // hooks; currently unused now that scheme registration is in Rust).
-            if let Some(cb) = state::with_config(|c| c.on_context_initialized) {
-                cb();
-            }
         }
 
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
-            if let Some(host) = jfn_platform_abi::try_get().and_then(|p| p.cef_host()) {
+            if let Some(platform) = jfn_platform_abi::try_lease()
+                && let Some(host) = platform.cef_host() {
                 host.pump_schedule(delay_ms);
             }
         }
@@ -612,11 +608,7 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
         }
     }
     replace_first(&mut code, "__SERVER_URL__", &jfn_config::server_url());
-    replace_first(
-        &mut code,
-        "__SETTINGS_JSON__",
-        &jfn_config::cli_json(jfn_mpv::hwdec_options()),
-    );
+    replace_first(&mut code, "__SETTINGS_JSON__", &jfn_config::cli_json());
     replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION);
     let decoration_options = profile
         .window_decoration_options()

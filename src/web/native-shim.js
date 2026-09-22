@@ -96,8 +96,7 @@
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
                 audioExclusive: _savedSettings.audioExclusive || false,
-                audioChannels: _savedSettings.audioChannels || '',
-                volumeBoost: _savedSettings.volumeBoost || ''
+                audioChannels: _savedSettings.audioChannels || ''
             },
             transcode: {
                 forceTranscoding: !!_savedSettings.forceTranscoding
@@ -106,7 +105,6 @@
                 transparentTitlebar: _savedSettings.transparentTitlebar !== false,
                 windowDecorations: __WINDOW_DECORATIONS__,
                 hideScrollbar: _savedSettings.hideScrollbar !== false,
-                closeToTray: !!_savedSettings.closeToTray,
                 logLevel: _savedSettings.logLevel || '',
                 deviceName: _savedSettings.deviceName || ''
             }
@@ -123,21 +121,12 @@
                     { value: 'stereo', title: 'Stereo' },
                     { value: '5.1', title: '5.1 Surround' },
                     { value: '7.1', title: '7.1 Surround' }
-                ]},
-                // Ceiling must stay at or below jfn_mpv::boot::VOLUME_MAX,
-                // which is what mpv boots volume-max with.
-                { key: 'volumeBoost', displayName: 'Volume Boost', help: 'What the volume slider reads at 100%. Above 100% the extra gain is digital, so loud sources can clip on peaks. For quiet dialogue against loud effects, an mpv.conf compressor works better than gain.', options: [
-                    { value: '', title: 'Off (100%)' },
-                    { value: '125', title: '125%' },
-                    { value: '150', title: '150%' },
-                    { value: '200', title: '200%' }
                 ]}
             ],
             transcode: [
                 { key: 'forceTranscoding', displayName: 'Force Transcoding', help: 'Always request a transcoded stream from the server, even when direct play would work.' }
             ],
             advanced: [
-                { key: 'closeToTray', displayName: 'Close to Tray', help: 'Closing the window hides it in the system tray instead of quitting. The app keeps playing and stays available to cast to. Quit from the tray menu.' },
                 { key: 'hideScrollbar', displayName: 'Hide Scrollbar', help: 'Hide scrollbars throughout the app. Scrolling with the wheel, trackpad, and keyboard still works. Requires restart.' },
                 { key: 'deviceName', displayName: 'Device Name', help: 'Identifies this machine to the server. Leave blank to use the system hostname.', inputType: 'text', maxLength: 64, placeholder: _savedSettings.deviceNameDefault },
                 { key: 'logLevel', displayName: 'Log Level', help: 'Set the application log verbosity level.', options: [
@@ -396,7 +385,7 @@
             window.api.system.openExternalUrl(info.url);
         },
         openClientSettings() {
-            window._openClientSettings();
+            window.jmpNative.openClientSettings();
         },
         getPlugins() {
             return plugins;

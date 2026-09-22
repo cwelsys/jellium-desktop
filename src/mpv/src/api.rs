@@ -302,8 +302,35 @@ pub fn jfn_mpv_seek_absolute(secs: f64) {
     let s = CString::new(format!("{}", secs)).unwrap_or_default();
     cmd(&[c"seek", &s, c"absolute"]);
 }
+/// The UI slider's last value and the boost it is scaled by at mpv, so a
+/// boost change can re-apply without waiting for the next slider move.
+struct Volume {
+    slider: Option<f64>,
+    scale: f64,
+}
+
+static VOLUME: Mutex<Volume> = Mutex::new(Volume {
+    slider: None,
+    scale: 1.0,
+});
+
+fn apply_volume(v: &Volume) {
+    if let Some(slider) = v.slider {
+        let max = f64::from(crate::boot::VOLUME_MAX);
+        unsafe { set_double(c"volume", (slider * v.scale).round().min(max)) };
+    }
+}
+
 pub fn jfn_mpv_set_volume(v: f64) {
-    unsafe { set_double(c"volume", v) };
+    let mut vol = VOLUME.lock();
+    vol.slider = Some(v);
+    apply_volume(&vol);
+}
+
+pub fn jfn_mpv_set_volume_scale(scale: f64) {
+    let mut vol = VOLUME.lock();
+    vol.scale = scale;
+    apply_volume(&vol);
 }
 pub fn jfn_mpv_set_muted(v: bool) {
     unsafe { set_flag(c"mute", v) };

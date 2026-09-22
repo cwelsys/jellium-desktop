@@ -6,7 +6,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use jfn_platform_abi::get as plat;
 use jfn_tray::policy::{
     CloseAction, PlaybackAction, VisibilityAction, on_close, on_hide, on_video_mode,
     on_video_resumed,
@@ -65,8 +64,11 @@ pub fn tray_available() -> bool {
 /// actually changes so redundant show/hide calls never reach it.
 fn set_mapped(visible: bool) {
     let new_hidden = !visible;
-    if HIDDEN.swap(new_hidden, Ordering::AcqRel) != new_hidden {
-        plat().window_set_visible(visible);
+    if HIDDEN.swap(new_hidden, Ordering::AcqRel) != new_hidden
+        && let Some(lease) = jfn_platform_abi::try_lease()
+        && let Some(window) = lease.platform().window_visibility()
+    {
+        window.set_visible(visible);
     }
 }
 

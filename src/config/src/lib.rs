@@ -17,11 +17,13 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
 
+mod hardware_decode;
+pub use hardware_decode::{HWDEC_DEFAULT, Hwdec, UnknownHwdec, hwdec_options};
+
 const DEVICE_NAME_MAX: usize = 64;
-const HWDEC_DEFAULT: &str = "no";
 
 /// True when the stored boost is a real one, so unity and the empty default
-/// stay absent from both settings.json and the web UI blob.
+/// stay absent from settings.json.
 fn is_boosting(v: &str) -> bool {
     !v.is_empty() && v != "100"
 }
@@ -34,7 +36,6 @@ pub struct JfnWindowGeometry {
     pub height: i32,
     pub logical_width: i32,
     pub logical_height: i32,
-    pub scale: f32,
     pub maximized: bool,
 }
 
@@ -47,7 +48,6 @@ impl Default for JfnWindowGeometry {
             height: 0,
             logical_width: 0,
             logical_height: 0,
-            scale: 0.0,
             maximized: false,
         }
     }
@@ -56,7 +56,7 @@ impl Default for JfnWindowGeometry {
 #[derive(Clone, Debug)]
 struct SettingsData {
     server_url: String,
-    hwdec: String,
+    hwdec: Hwdec,
     audio_passthrough: String,
     audio_channels: String,
     /// Percent the UI's 0-100 volume slider maps onto; empty or "100" is
@@ -78,7 +78,7 @@ impl Default for SettingsData {
     fn default() -> Self {
         Self {
             server_url: String::new(),
-            hwdec: String::new(),
+            hwdec: Hwdec::default(),
             audio_passthrough: String::new(),
             audio_channels: String::new(),
             volume_boost: String::new(),
@@ -116,11 +116,6 @@ struct SettingsFile {
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_logical_height: Option<i32>,
 
-    // f64 on the wire: the stored value is an f32, and widening before
-    // formatting keeps the digits identical to files written so far.
-    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
-    window_scale: Option<f64>,
-
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_x: Option<i32>,
 
@@ -131,7 +126,7 @@ struct SettingsFile {
     window_maximized: Option<bool>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
-    hwdec: Option<String>,
+    hwdec: Option<Hwdec>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<String>,
@@ -215,8 +210,7 @@ where
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CliSettings<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hwdec: Option<&'a str>,
+    hwdec: Hwdec,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<&'a str>,
@@ -226,9 +220,6 @@ struct CliSettings<'a> {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     audio_channels: Option<&'a str>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    volume_boost: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     disable_gpu_compositing: Option<bool>,
@@ -243,14 +234,12 @@ struct CliSettings<'a> {
 
     hide_scrollbar: bool,
 
-    close_to_tray: bool,
-
     #[serde(skip_serializing_if = "Option::is_none")]
     device_name: Option<&'a str>,
 
     device_name_default: String,
 
-    hwdec_options: &'a [&'a str],
+    hwdec_options: &'static [&'static str],
 }
 
 impl SettingsData {
@@ -288,9 +277,6 @@ impl SettingsData {
         }
         if let Some(v) = file.window_logical_height {
             self.window.logical_height = v;
-        }
-        if let Some(v) = file.window_scale {
-            self.window.scale = v as f32;
         }
         if let Some(v) = file.window_x {
             self.window.x = v;
@@ -334,12 +320,10 @@ impl SettingsData {
             window_height: size.then_some(self.window.height),
             window_logical_width: logical.then_some(self.window.logical_width),
             window_logical_height: logical.then_some(self.window.logical_height),
-            window_scale: (self.window.scale > 0.0).then(|| f64::from(self.window.scale)),
             window_x: position.then_some(self.window.x),
             window_y: position.then_some(self.window.y),
             window_maximized: Some(self.window.maximized),
-            hwdec: (!self.hwdec.is_empty() && self.hwdec != HWDEC_DEFAULT)
-                .then(|| self.hwdec.clone()),
+            hwdec: (self.hwdec != Hwdec::default()).then_some(self.hwdec),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then(|| self.audio_passthrough.clone()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -356,24 +340,22 @@ impl SettingsData {
         }
     }
 
-    fn cli_json(&self, hwdec_opts: &[&str]) -> String {
+    fn cli_json(&self) -> String {
         let view = CliSettings {
-            hwdec: (!self.hwdec.is_empty()).then_some(self.hwdec.as_str()),
+            hwdec: self.hwdec,
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then_some(self.audio_passthrough.as_str()),
             audio_exclusive: self.audio_exclusive.then_some(true),
             audio_channels: (!self.audio_channels.is_empty())
                 .then_some(self.audio_channels.as_str()),
-            volume_boost: is_boosting(&self.volume_boost).then_some(self.volume_boost.as_str()),
             disable_gpu_compositing: self.disable_gpu_compositing.then_some(true),
             transparent_titlebar: (!self.transparent_titlebar).then_some(false),
             log_level: (!self.log_level.is_empty()).then_some(self.log_level.as_str()),
             force_transcoding: self.force_transcoding,
             hide_scrollbar: self.hide_scrollbar,
-            close_to_tray: self.close_to_tray,
             device_name: (!self.device_name.is_empty()).then_some(self.device_name.as_str()),
             device_name_default: default_device_name(),
-            hwdec_options: hwdec_opts,
+            hwdec_options: hwdec_options(),
         };
         serde_json::to_string(&view).unwrap_or_default()
     }
@@ -552,10 +534,30 @@ macro_rules! bool_accessors {
 }
 
 string_accessors!(server_url, set_server_url, server_url);
-string_accessors!(hwdec, set_hwdec, hwdec);
+
+pub fn hwdec() -> Hwdec {
+    state().lock().data.hwdec
+}
+
+pub fn set_hwdec(v: Hwdec) {
+    state().lock().data.hwdec = v;
+}
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(volume_boost, set_volume_boost, volume_boost);
+
+/// What the volume slider's 100% maps to at mpv. Empty, unity and garbage all
+/// fall back to 1.
+pub fn volume_scale() -> f64 {
+    scale_of(&volume_boost())
+}
+
+fn scale_of(boost: &str) -> f64 {
+    match boost.parse::<f64>() {
+        Ok(v) if v.is_finite() && v > 0.0 => v / 100.0,
+        _ => 1.0,
+    }
+}
 string_accessors!(log_level, set_log_level, log_level);
 
 pub fn device_name() -> String {
@@ -619,7 +621,7 @@ pub fn configured_window_decorations() -> Option<WindowDecorations> {
 /// if absent.
 pub fn window_decorations_mode() -> WindowDecorations {
     let configured = state().lock().data.window_decorations;
-    jfn_platform_abi::get().resolve_window_decorations(configured)
+    jfn_platform_abi::resolve_window_decorations(configured)
 }
 
 pub fn window_decorations() -> String {
@@ -647,9 +649,9 @@ pub fn set_window_geometry(g: JfnWindowGeometry) {
     state().lock().data.window = g;
 }
 
-pub fn cli_json(hwdec_opts: &[&str]) -> String {
+pub fn cli_json() -> String {
     let snap = state().lock().data.clone();
-    snap.cli_json(hwdec_opts)
+    snap.cli_json()
 }
 
 fn normalize_device_name(raw: &str, platform_default: &str) -> String {
@@ -683,6 +685,7 @@ fn normalize_device_name(raw: &str, platform_default: &str) -> String {
 mod tests {
     use super::{
         SettingsData, SettingsFile, WindowDecorations, default_device_name, normalize_device_name,
+        scale_of,
     };
 
     const PLATFORM: &str = "platform-host";
@@ -737,7 +740,7 @@ mod tests {
     fn every_key_writes_in_schema_order() {
         let data = SettingsData {
             server_url: "http://host".into(),
-            hwdec: "vaapi".into(),
+            hwdec: "auto".parse().expect("auto is offered everywhere"),
             audio_passthrough: "eac3".into(),
             audio_channels: "stereo".into(),
             volume_boost: "200".into(),
@@ -750,7 +753,6 @@ mod tests {
                 height: 4,
                 logical_width: 5,
                 logical_height: 6,
-                scale: 1.5,
                 maximized: true,
             },
             audio_exclusive: true,
@@ -770,7 +772,6 @@ mod tests {
                 "windowHeight",
                 "windowLogicalWidth",
                 "windowLogicalHeight",
-                "windowScale",
                 "windowX",
                 "windowY",
                 "windowMaximized",
@@ -790,7 +791,6 @@ mod tests {
             ]
         );
         assert!(text.contains(r#""windowDecorations":"serverThemed""#));
-        assert!(text.contains(r#""windowScale":1.5"#));
     }
 
     #[test]
@@ -818,6 +818,14 @@ mod tests {
     }
 
     #[test]
+    fn volume_scale_falls_back_to_unity() {
+        assert_eq!(scale_of("150"), 1.5);
+        assert_eq!(scale_of(""), 1.0);
+        assert_eq!(scale_of("0"), 1.0);
+        assert_eq!(scale_of("loud"), 1.0);
+    }
+
+    #[test]
     fn close_to_tray_defaults_off_and_round_trips() {
         assert!(!SettingsData::default().close_to_tray);
         assert!(loaded(r#"{"closeToTray":true}"#).close_to_tray);
@@ -838,6 +846,20 @@ mod tests {
         assert!(data.transparent_titlebar);
         assert!(data.hide_scrollbar);
         assert_eq!(data.window.x, -1);
+    }
+
+    #[test]
+    fn transparent_titlebar_false_round_trips_and_true_is_omitted() {
+        let false_data = loaded(r#"{"transparentTitlebar":false}"#);
+        assert!(!false_data.transparent_titlebar);
+        let false_json = serde_json::to_string(&false_data.to_file()).expect("serializes");
+        assert!(false_json.contains(r#""transparentTitlebar":false"#));
+        assert!(!loaded(&false_json).transparent_titlebar);
+
+        let true_json =
+            serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
+        assert!(!true_json.contains("transparentTitlebar"));
+        assert!(loaded(&true_json).transparent_titlebar);
     }
 
     #[test]
@@ -870,28 +892,25 @@ mod tests {
     #[test]
     fn cli_json_emits_the_web_ui_contract() {
         let data = SettingsData {
-            hwdec: "vaapi".into(),
-            volume_boost: "150".into(),
             transparent_titlebar: false,
             device_name: "box".into(),
             ..SettingsData::default()
         };
-        let text = data.cli_json(&["no", "auto"]);
+        let text = data.cli_json();
         assert_eq!(
             keys(&text),
             [
                 "hwdec",
-                "volumeBoost",
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
-                "closeToTray",
                 "deviceName",
                 "deviceNameDefault",
                 "hwdecOptions",
             ]
         );
-        assert!(text.contains(r#""hwdecOptions":["no","auto"]"#));
+        let options = serde_json::to_string(super::hwdec_options()).expect("serializes");
+        assert!(text.contains(&format!(r#""hwdecOptions":{options}"#)));
         assert!(text.contains(&format!(
             r#""deviceNameDefault":"{}""#,
             default_device_name()

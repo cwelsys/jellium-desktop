@@ -256,7 +256,6 @@
         }
 
         destroy() {
-            this.destroyBase();
             this.removeMediaDialog();
             this.disconnectSignals();
 
