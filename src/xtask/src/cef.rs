@@ -75,7 +75,7 @@ pub fn explicit(dir: &Path) -> Result<Cef> {
     })
 }
 
-pub fn sdk_proxy(real_dir: &Path) -> Result<(tempfile::TempDir, PathBuf)> {
+pub fn sdk_proxy(real_dir: &Path, include: Option<&Path>) -> Result<(tempfile::TempDir, PathBuf)> {
     let tmp = tempfile::tempdir()?;
     let proxy = tmp.path().to_path_buf();
 
@@ -89,6 +89,11 @@ pub fn sdk_proxy(real_dir: &Path) -> Result<(tempfile::TempDir, PathBuf)> {
         }
         create_link(&entry.path(), &proxy.join(&name))
             .with_context(|| format!("link {} in cef-sdk-proxy", name.to_string_lossy()))?;
+    }
+
+    if let Some(include) = include {
+        create_link(include, &proxy.join("include"))
+            .with_context(|| format!("link {} as include in cef-sdk-proxy", include.display()))?;
     }
 
     let cef_version = download_cef::default_version(&version::cef_package_version()?);

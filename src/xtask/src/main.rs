@@ -47,6 +47,9 @@ pub struct BuildArgs {
     /// rpath an installed CEF in place.
     #[arg(long)]
     pub cef_path: Option<PathBuf>,
+    /// CEF headers for a --cef-path install that keeps them outside it.
+    #[arg(long, requires = "cef_path")]
+    pub cef_include_path: Option<PathBuf>,
     /// Use the named external libmpv directory (must contain include/ and lib/).
     #[arg(long, env = "EXTERNAL_MPV_DIR")]
     pub external_mpv: Option<PathBuf>,

@@ -36,7 +36,7 @@ pub fn run(args: &BuildArgs) -> Result<()> {
 
     let _cef_proxy;
     if cef_info.link_external {
-        let (tmp, proxy) = cef::sdk_proxy(&cef_info.root)?;
+        let (tmp, proxy) = cef::sdk_proxy(&cef_info.root, args.cef_include_path.as_deref())?;
         _cef_proxy = Some(tmp);
         cmd.env("CEF_PATH", &proxy);
         cmd.env("CEF_RESOURCES_DIR", &cef_info.root);
