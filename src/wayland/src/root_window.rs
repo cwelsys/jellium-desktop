@@ -37,6 +37,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::{
 use wayland_protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
+use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 use wayland_protocols::xdg::shell::client::xdg_toplevel;
 #[cfg(feature = "kde-palette")]
 use wayland_protocols_plasma::server_decoration_palette::client::{
@@ -92,6 +93,7 @@ pub(crate) struct RootShared {
     /// Coalesced request for one root commit; every producer that needs to
     /// present latches it and the root thread drains it once per pass.
     pending_present: AtomicBool,
+    active: AtomicBool,
     root_surface: OnceLock<RootSurfaceHandle>,
     /// The toplevel, parked for the life of the process. SCTK's `Window`
     /// destroys the root `wl_surface` when its last handle drops, and the CEF
@@ -123,6 +125,7 @@ impl RootShared {
             commands_tx,
             commands_rx,
             pending_present: AtomicBool::new(false),
+            active: AtomicBool::new(false),
             root_surface: OnceLock::new(),
             window: OnceLock::new(),
             thread: OnceLock::new(),
@@ -214,6 +217,14 @@ impl RootShared {
         self.send(WindowCommand::SetVisible(visible));
     }
 
+    pub(crate) fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn activate(&self, token: &str) {
+        self.send(WindowCommand::Activate(token.to_owned()));
+    }
+
     pub(crate) fn set_background_color(&self, r: u8, g: u8, b: u8) {
         self.send(WindowCommand::SetBackground([r, g, b]));
     }
@@ -257,6 +268,7 @@ struct RootState {
     // Single-owner protocol objects for window-control commands, owned by this
     // thread. `seat` also drives interactive move/resize grabs.
     seat: Option<WlSeat>,
+    activation: Option<XdgActivationV1>,
     #[cfg(feature = "kde-palette")]
     palette: Option<OrgKdeKwinServerDecorationPalette>,
     shm_pool: Option<SlotPool>,
@@ -682,6 +694,7 @@ enum WindowCommand {
     Maximized(ModeRequest),
     Minimize,
     SetVisible(bool),
+    Activate(String),
     /// Applied on the root thread, which owns the surface, so the background
     /// rebuild lands in the single owner commit.
     SetBackground([u8; 3]),
@@ -742,6 +755,13 @@ fn apply_command(state: &mut RootState, cmd: WindowCommand) {
         }
         WindowCommand::Minimize => state.window.set_minimized(),
         WindowCommand::SetVisible(visible) => set_window_visible(state, visible),
+        WindowCommand::Activate(token) => {
+            if let Some(activation) = &state.activation {
+                activation.activate(token, state.window.wl_surface());
+            } else {
+                tracing::warn!(target: "Main", "activation dropped: no xdg_activation_v1");
+            }
+        }
         WindowCommand::SetBackground(bg) => {
             if bg != state.bg {
                 state.bg = bg;
@@ -777,6 +797,7 @@ fn set_window_visible(state: &mut RootState, visible: bool) {
     // lands last: both calls drive the same sink.
     jfn_playback::lifecycle::jfn_lifecycle_set_visible(visible);
     if !visible {
+        state.rt.root().active.store(false, Ordering::Release);
         state.remap.hide();
         // Commits outside the present latch, like the boot-time roleless
         // commit: no new content is attached, so a same-tick latch commit
@@ -959,6 +980,7 @@ pub(crate) fn ensure_started(rt: &'static WlRuntime) {
         .map(|mgr| mgr.create(&surface, &qh, ()));
 
     let seat: Option<WlSeat> = globals.bind(&qh, 1..=8, ()).ok();
+    let activation: Option<XdgActivationV1> = globals.bind(&qh, 1..=1, ()).ok();
 
     window
         .xdg_surface()
@@ -990,6 +1012,7 @@ pub(crate) fn ensure_started(rt: &'static WlRuntime) {
         window,
         decorations_negotiated,
         seat,
+        activation,
         #[cfg(feature = "kde-palette")]
         palette,
         shm_pool: new_slot_pool(&shm, "root window"),
@@ -1335,6 +1358,11 @@ impl WindowHandler for RootState {
             crate::window_state::WindowMode::Floating
         };
 
+        self.rt.root().active.store(
+            configure.state.contains(WindowState::ACTIVATED),
+            Ordering::Release,
+        );
+
         let suspended = configure.state.contains(WindowState::SUSPENDED);
         if suspended != self.suspended {
             self.suspended = suspended;
@@ -1409,6 +1437,7 @@ noop_dispatch!(
     WpViewport,
     WpFractionalScaleManagerV1,
     WlSeat,
+    XdgActivationV1,
 );
 
 #[cfg(feature = "kde-palette")]

@@ -31,6 +31,14 @@ pub fn on_close(tray_available: bool, close_to_tray: bool) -> CloseAction {
     }
 }
 
+pub fn on_activate(hidden: bool, focused: bool) -> VisibilityAction {
+    if !hidden && focused {
+        VisibilityAction::Hide
+    } else {
+        VisibilityAction::Show
+    }
+}
+
 /// `raised_by_playback` distinguishes a window playback raised from one the
 /// user opened; only the former is hidden again when playback ends. Returns the
 /// action and the new flag value.
@@ -81,6 +89,14 @@ mod tests {
         assert_eq!(on_close(true, false), CloseAction::Quit);
         assert_eq!(on_close(false, true), CloseAction::Quit);
         assert_eq!(on_close(false, false), CloseAction::Quit);
+    }
+
+    #[test]
+    fn activate_hides_only_a_focused_window() {
+        assert_eq!(on_activate(false, true), VisibilityAction::Hide);
+        assert_eq!(on_activate(false, false), VisibilityAction::Show);
+        assert_eq!(on_activate(true, false), VisibilityAction::Show);
+        assert_eq!(on_activate(true, true), VisibilityAction::Show);
     }
 
     #[test]

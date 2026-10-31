@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 /// the binary crate.
 #[derive(Clone, Copy)]
 pub struct Callbacks {
-    pub toggle: fn(),
-    pub show: fn(),
+    pub activate: fn(Option<String>),
+    pub show: fn(Option<String>),
     pub quit: fn(),
     pub available: fn(bool),
 }

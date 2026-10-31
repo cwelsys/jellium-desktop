@@ -437,6 +437,10 @@ pub trait WindowVisibility: Send + Sync {
     /// Map or unmap the app's toplevel. Hiding keeps the process, the browser
     /// session, and mpv running; only the window leaves the screen.
     fn set_visible(&self, visible: bool);
+
+    fn is_active(&self) -> bool;
+
+    fn activate(&self, token: &str);
 }
 
 /// Process-wide platform handle.

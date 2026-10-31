@@ -41,14 +41,16 @@ impl ksni::Tray for JelliumTray {
 
     /// Left click.
     fn activate(&mut self, _x: i32, _y: i32) {
-        (self.callbacks.toggle)();
+        (self.callbacks.activate)(ksni::current_xdg_activation_token());
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         vec![
             StandardItem {
                 label: "Open Jellium Desktop".into(),
-                activate: Box::new(|this: &mut Self| (this.callbacks.show)()),
+                activate: Box::new(|this: &mut Self| {
+                    (this.callbacks.show)(ksni::current_xdg_activation_token())
+                }),
                 ..Default::default()
             }
             .into(),

@@ -733,8 +733,8 @@ impl RunningRuntime {
         #[cfg(target_os = "linux")]
         if plat().window_visibility().is_some() {
             jfn_tray::start(jfn_tray::Callbacks {
-                toggle: || crate::visibility::toggle(),
-                show: || crate::visibility::show(),
+                activate: crate::visibility::activate,
+                show: crate::visibility::present,
                 quit: || jfn_playback::shutdown::jfn_shutdown_initiate(),
                 available: |v| crate::visibility::set_tray_available(v),
             });

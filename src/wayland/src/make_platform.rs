@@ -65,6 +65,14 @@ impl WindowVisibility for WaylandPlatform {
     fn set_visible(&self, visible: bool) {
         self.rt().root().set_visible(visible);
     }
+
+    fn is_active(&self) -> bool {
+        self.rt().root().is_active()
+    }
+
+    fn activate(&self, token: &str) {
+        self.rt().root().activate(token);
+    }
 }
 
 impl WaylandPlatform {

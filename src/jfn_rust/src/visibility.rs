@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use jfn_tray::policy::{
-    CloseAction, PlaybackAction, VisibilityAction, on_close, on_hide, on_video_mode,
+    CloseAction, PlaybackAction, VisibilityAction, on_activate, on_close, on_hide, on_video_mode,
     on_video_resumed,
 };
 
@@ -75,9 +75,19 @@ fn set_mapped(visible: bool) {
 /// Clears `raised_by_playback`: a window the user asked for stays up when
 /// playback ends.
 pub fn show() {
+    present(None);
+}
+
+pub fn present(token: Option<String>) {
     cancel_pending_hide();
     RAISED_BY_PLAYBACK.store(false, Ordering::Release);
     set_mapped(true);
+    if let Some(token) = token
+        && let Some(lease) = jfn_platform_abi::try_lease()
+        && let Some(window) = lease.platform().window_visibility()
+    {
+        window.activate(&token);
+    }
 }
 
 /// Pauses first, so the last frame is not decoded into a surface that is about
@@ -101,8 +111,18 @@ pub fn handle_video_resumed() {
     }
 }
 
-pub fn toggle() {
-    if hidden() { show() } else { hide() }
+pub fn activate(token: Option<String>) {
+    let focused = jfn_platform_abi::try_lease().is_some_and(|lease| {
+        lease
+            .platform()
+            .window_visibility()
+            .is_some_and(|window| window.is_active())
+    });
+    match on_activate(hidden(), focused) {
+        VisibilityAction::Show => present(token),
+        VisibilityAction::Hide => hide(),
+        VisibilityAction::Nothing => {}
+    }
 }
 
 /// True if the close was absorbed by hiding; false falls through to shutdown.
