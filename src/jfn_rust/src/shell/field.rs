@@ -618,14 +618,14 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Field<'_, Message> {
         &self,
         tree: &widget::Tree,
         renderer: &mut Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         _defaults: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<State>();
-        let style = crate::shell::theme::field_style(state.focus.is_focused());
+        let style = theme.field_style(state.focus.is_focused());
         let bounds = layout.bounds();
 
         renderer.fill_quad(

@@ -10,7 +10,7 @@ use iced_core::{
 };
 use iced_widget::pick_list;
 
-use crate::shell::theme::{self, Theme};
+use crate::shell::theme::Theme;
 
 type Renderer = iced_wgpu::Renderer;
 
@@ -103,6 +103,8 @@ pub fn tab<'a, Message: Clone + 'a>(
     action(id, content, message)
 }
 
+pub const CONTROL_WIDTH: f32 = 340.0;
+
 /// Builds a mouse- and keyboard-capable select. Enter or Space opens it, arrow
 /// keys move its cyclic highlight, Enter or Space commits, and Escape cancels.
 pub fn select<'a, T, Message>(
@@ -120,7 +122,8 @@ where
     let messages = options.iter().cloned().map(on_select.clone()).collect();
     let content = pick_list(Some(selected), options, to_string)
         .on_select(on_select)
-        .padding(iced_core::Padding::from([8, 10]));
+        .width(Length::Fixed(CONTROL_WIDTH))
+        .padding(iced_core::Padding::from([10, 12]));
 
     Element::new(Control {
         id,
@@ -298,7 +301,7 @@ impl<Message: Clone> widget::Widget<Message, Theme, Renderer> for Control<'_, Me
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: layout.bounds(),
-                    border: theme::control_focus_border(),
+                    border: theme.control_focus_border(),
                     ..renderer::Quad::default()
                 },
                 Background::Color(iced_core::Color::TRANSPARENT),
@@ -1091,8 +1094,8 @@ mod tests {
 
     #[test]
     fn focus_ring_is_the_existing_two_pixel_accent() {
-        let border = theme::control_focus_border();
-        assert_eq!(border.color, theme::ACCENT);
+        let border = Theme::default().control_focus_border();
+        assert_eq!(border.color, crate::shell::theme::ACCENT);
         assert_eq!(border.width, 2.0);
     }
 }

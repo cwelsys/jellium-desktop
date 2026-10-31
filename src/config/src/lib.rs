@@ -72,6 +72,7 @@ struct SettingsData {
     window_decorations: Option<WindowDecorations>,
     hide_scrollbar: bool,
     close_to_tray: bool,
+    theme: String,
 }
 
 impl Default for SettingsData {
@@ -92,6 +93,7 @@ impl Default for SettingsData {
             window_decorations: None,
             hide_scrollbar: true,
             close_to_tray: false,
+            theme: String::new(),
         }
     }
 }
@@ -164,6 +166,9 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     close_to_tray: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    theme: Option<String>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     device_name: Option<String>,
@@ -308,6 +313,9 @@ impl SettingsData {
         if let Some(v) = file.close_to_tray {
             self.close_to_tray = v;
         }
+        if let Some(v) = file.theme {
+            self.theme = v;
+        }
     }
 
     fn to_file(&self) -> SettingsFile {
@@ -336,6 +344,7 @@ impl SettingsData {
             window_decorations: self.window_decorations,
             hide_scrollbar: (!self.hide_scrollbar).then_some(false),
             close_to_tray: self.close_to_tray.then_some(true),
+            theme: (!self.theme.is_empty()).then(|| self.theme.clone()),
             device_name: (!self.device_name.is_empty()).then(|| self.device_name.clone()),
         }
     }
@@ -545,6 +554,7 @@ pub fn set_hwdec(v: Hwdec) {
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(volume_boost, set_volume_boost, volume_boost);
+string_accessors!(theme, set_theme, theme);
 
 /// What the volume slider's 100% maps to at mpv. Empty, unity and garbage all
 /// fall back to 1.
@@ -762,6 +772,7 @@ mod tests {
             window_decorations: Some(WindowDecorations::ServerThemed),
             hide_scrollbar: false,
             close_to_tray: true,
+            theme: "catppuccin-mocha".into(),
         };
         let text = serde_json::to_string(&data.to_file()).expect("serializes");
         assert_eq!(
@@ -787,10 +798,22 @@ mod tests {
                 "windowDecorations",
                 "hideScrollbar",
                 "closeToTray",
+                "theme",
                 "deviceName",
             ]
         );
         assert!(text.contains(r#""windowDecorations":"serverThemed""#));
+    }
+
+    #[test]
+    fn theme_defaults_empty_and_round_trips() {
+        assert_eq!(SettingsData::default().theme, "");
+        assert_eq!(
+            loaded(r#"{"theme":"catppuccin-mocha"}"#).theme,
+            "catppuccin-mocha"
+        );
+        let text = serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
+        assert!(!text.contains("theme"));
     }
 
     #[test]

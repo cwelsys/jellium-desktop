@@ -3,7 +3,7 @@
 use iced_core::widget::Id;
 use iced_core::widget::operation::scrollable::AbsoluteOffset;
 use iced_core::{Alignment, Color, Element, Length, Padding};
-use iced_widget::{Container, button, column, container, mouse_area, row, text};
+use iced_widget::{Container, button, column, container, mouse_area, responsive, row, text};
 
 use crate::shell::about::About;
 use crate::shell::controls;
@@ -12,6 +12,8 @@ use crate::shell::theme::{self, Theme};
 
 pub const SETTINGS_TAB_CONTROL: Id = Id::new("shell-settings-tab");
 pub const ABOUT_TAB_CONTROL: Id = Id::new("shell-about-tab");
+
+const CARD_WIDTH: f32 = 760.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -150,6 +152,29 @@ impl SettingsOverlay {
     }
 
     pub fn view(&self) -> Element<'_, Message, Theme, iced_wgpu::Renderer> {
+        let centered = responsive(move |size| {
+            container(
+                mouse_area(card(self.body(), size.width.min(CARD_WIDTH)))
+                    .on_press(Message::Swallow),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        });
+
+        mouse_area(
+            container(centered)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(24)
+                .class(theme::ContainerClass::Backdrop),
+        )
+        .on_press(Message::Dismiss)
+        .into()
+    }
+
+    fn body(&self) -> Element<'_, Message, Theme, iced_wgpu::Renderer> {
         let settings_tab = controls::tab(
             SETTINGS_TAB_CONTROL,
             button(text(settings::TITLE))
@@ -183,20 +208,7 @@ impl SettingsOverlay {
             Tab::Settings => self.settings.view().map(Message::Settings),
             Tab::About => self.about.view().map(Message::About),
         };
-        let body = column![header, content].spacing(18);
-        let card = mouse_area(card(body)).on_press(Message::Swallow);
-
-        mouse_area(
-            container(card)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(24)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
-                .class(theme::ContainerClass::Backdrop),
-        )
-        .on_press(Message::Dismiss)
-        .into()
+        column![header, content].spacing(18).into()
     }
 
     pub fn backdrop(&self) -> Color {
@@ -208,7 +220,7 @@ impl SettingsOverlay {
 
     pub fn focus_target(&self) -> Option<Id> {
         match self.active {
-            Tab::Settings => self.settings.focus_target(),
+            Tab::Settings => Some(SETTINGS_TAB_CONTROL),
             Tab::About => Some(ABOUT_TAB_CONTROL),
         }
     }
@@ -216,12 +228,13 @@ impl SettingsOverlay {
 
 fn card<'a, Message: 'a, Renderer>(
     body: impl Into<Element<'a, Message, Theme, Renderer>>,
+    width: f32,
 ) -> Container<'a, Message, Theme, Renderer>
 where
     Renderer: iced_core::Renderer,
 {
     container(body)
-        .width(Length::Fixed(680.0))
+        .width(Length::Fixed(width))
         .height(Length::FillPortion(9))
         .padding(Padding::from([18, 24]))
         .clip(true)
@@ -251,7 +264,7 @@ mod tests {
                 .width(Length::Fixed(1.0))
                 .height(Length::Fixed(1.0)),
         };
-        let mut card = card::<Message, ()>(body);
+        let mut card = card::<Message, ()>(body, CARD_WIDTH);
         let mut tree = Tree::new(&card as &dyn Widget<Message, Theme, ()>);
         card.layout(
             &mut tree,
@@ -301,7 +314,7 @@ mod tests {
     fn each_initial_tab_has_its_named_focus_target() {
         assert_eq!(
             SettingsOverlay::testing(Tab::Settings).focus_target(),
-            Some(settings::AUDIO_PASSTHROUGH_FIELD)
+            Some(SETTINGS_TAB_CONTROL)
         );
         assert_eq!(
             SettingsOverlay::testing(Tab::About).focus_target(),
@@ -314,7 +327,7 @@ mod tests {
         assert_eq!(tab_class(true), theme::ButtonClass::TabSelected);
         assert_eq!(tab_class(false), theme::ButtonClass::Tab);
         assert_ne!(tab_class(true), tab_class(false));
-        assert_eq!(theme::control_focus_border().color, theme::ACCENT);
+        assert_eq!(Theme::default().control_focus_border().color, theme::ACCENT);
     }
 
     #[test]

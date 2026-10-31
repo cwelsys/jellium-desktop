@@ -16,6 +16,7 @@ pub const EXCLUSIVE_AUDIO_CONTROL: Id = Id::new("shell-settings-exclusive-audio"
 pub const CHANNEL_LAYOUT_CONTROL: Id = Id::new("shell-settings-channel-layout");
 pub const VOLUME_BOOST_CONTROL: Id = Id::new("shell-settings-volume-boost");
 pub const FORCE_TRANSCODE_CONTROL: Id = Id::new("shell-settings-force-transcode");
+pub const THEME_CONTROL: Id = Id::new("shell-settings-theme");
 pub const WINDOW_DECORATION_CONTROL: Id = Id::new("shell-settings-window-decoration");
 pub const TRANSPARENT_TITLEBAR_CONTROL: Id = Id::new("shell-settings-transparent-titlebar");
 pub const HIDE_SCROLLBAR_CONTROL: Id = Id::new("shell-settings-hide-scrollbar");
@@ -46,6 +47,7 @@ pub enum Message {
     AudioChannelLayoutChanged(String),
     VolumeBoostChanged(String),
     ForceTranscodingChanged(bool),
+    ThemeChanged(String),
     WindowDecorationsChanged(Option<WindowDecorations>),
     TransparentTitlebarChanged(bool),
     HideScrollbarChanged(bool),
@@ -102,17 +104,19 @@ impl Settings {
         let log_level = jfn_config::log_level();
 
         let mut controls = column![
-            text("Changes take effect after restarting the application.").class(Some(theme::MUTED)),
+            text("Changes take effect after restarting the application, unless noted.")
+                .size(theme::HELP_SIZE)
+                .class(theme::TextClass::Muted),
             self.group(SECTION_TITLES[0], column![self.selection(
                 "Hardware Decoding",
                 controls::select(
                     HARDWARE_DECODING_CONTROL,
                     hwdec_selected,
                     Self::hardware_decoding_choices(),
-                    Clone::clone,
+                    |value: &String| hwdec_label(value),
                     Message::HardwareDecodingChanged,
                 ),
-                "Hardware video decoding mode. Use \"auto\" for automatic detection or \"no\" to disable.",
+                "Decode video on the GPU. Auto picks a supported decoder; Off decodes on the CPU.",
             )]),
             self.group(SECTION_TITLES[1], column![
                 self.setting(
@@ -121,7 +125,8 @@ impl Settings {
                         .on_input(Message::AudioPassthroughEdited)
                         .on_submit(Message::CommitAudioPassthrough)
                         .on_unfocus(Message::CommitAudioPassthrough)
-                        .padding(Padding::from([8, 10]))
+                        .padding(Padding::from([10, 12]))
+                        .width(Length::Fixed(controls::CONTROL_WIDTH))
                         .into(),
                     "Comma-separated list of codecs to pass through to the audio device (e.g. ac3,eac3,dts-hd,truehd). Leave empty to disable.",
                 ),
@@ -152,7 +157,7 @@ impl Settings {
                         |value: &String| volume_boost_label(value),
                         Message::VolumeBoostChanged,
                     ),
-                    "What the volume slider reads at 100%. Above 100% the extra gain is digital, so loud sources can clip on peaks. For quiet dialogue against loud effects, an mpv.conf compressor works better than gain. Applies immediately.",
+                    "The gain at 100% on the volume slider. Gain above 100% is digital and can clip loud peaks; an mpv.conf compressor suits quiet dialogue better. Applies immediately.",
                 ),
             ]),
             self.group(SECTION_TITLES[2], column![self.toggle(
@@ -163,9 +168,20 @@ impl Settings {
                 "Always request a transcoded stream from the server, even when direct play would work.",
             )]),
         ]
-        .spacing(22);
+        .spacing(32);
 
-        let mut advanced = column![].spacing(16);
+        let mut advanced = column![self.selection(
+            "Theme",
+            controls::select(
+                THEME_CONTROL,
+                jfn_config::theme(),
+                theme::THEME_NAMES.map(str::to_owned).to_vec(),
+                |value: &String| theme::theme_label(value),
+                Message::ThemeChanged,
+            ),
+            "Colors for the settings panel and menus. Applies immediately.",
+        )]
+        .spacing(20);
         if !self.decoration_options.is_empty() {
             advanced = advanced.push(self.selection(
                 "Window Decorations",
@@ -176,7 +192,7 @@ impl Settings {
                     decoration_label,
                     Message::WindowDecorationsChanged,
                 ),
-                "How the window titlebar is drawn. Changing requires restart.",
+                "How the window titlebar is drawn.",
             ));
         }
         if jfn_platform_abi::try_lease()
@@ -187,7 +203,7 @@ impl Settings {
                 "Transparent Titlebar",
                 jfn_config::transparent_titlebar(),
                 Message::TransparentTitlebarChanged,
-                "Overlay traffic light buttons on the window content instead of a separate titlebar. Requires restart.",
+                "Overlay traffic light buttons on the window content instead of a separate titlebar.",
             ));
         }
         advanced = advanced
@@ -196,7 +212,7 @@ impl Settings {
                 "Hide Scrollbar",
                 jfn_config::hide_scrollbar(),
                 Message::HideScrollbarChanged,
-                "Hide scrollbars throughout the app. Scrolling with the wheel, trackpad, and keyboard still works. Requires restart.",
+                "Hide scrollbars throughout the app. Scrolling with the wheel, trackpad, and keyboard still works.",
             ));
         if close_to_tray_visible() {
             advanced = advanced.push(self.toggle(
@@ -204,7 +220,7 @@ impl Settings {
                 "Close to Tray",
                 jfn_config::close_to_tray(),
                 Message::CloseToTrayChanged,
-                "Closing the window hides it in the system tray instead of quitting. The app keeps playing and stays available to cast to. Quit from the tray menu.",
+                "Closing the window hides it in the system tray instead of quitting. The app keeps playing and stays available to cast to. Quit from the tray menu. Applies immediately.",
             ));
         }
         advanced = advanced
@@ -214,7 +230,8 @@ impl Settings {
                     .on_input(Message::DeviceNameEdited)
                     .on_submit(Message::CommitDeviceName)
                     .on_unfocus(Message::CommitDeviceName)
-                    .padding(Padding::from([8, 10]))
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fixed(controls::CONTROL_WIDTH))
                     .into(),
                 "Identifies this machine to the server. Leave blank to use the system hostname.",
             ))
@@ -231,30 +248,31 @@ impl Settings {
                 ),
                 "Set the application log verbosity level.",
             ));
-        controls = controls.push(self.group(SECTION_TITLES[3], advanced));
+        controls = controls
+            .push(self.group(SECTION_TITLES[3], advanced))
+            .push(self.group(
+                SECTION_TITLES[4],
+                column![self.action(
+                    OPEN_MPV_CONFIG_CONTROL,
+                    "Open mpv config directory",
+                    Message::OpenMpvConfigDirectory,
+                )],
+            ));
         if self.server_available {
-            controls = controls
-                .push(self.group(
-                    SECTION_TITLES[4],
-                    column![self.action(
-                        OPEN_MPV_CONFIG_CONTROL,
-                        "Open mpv config directory",
-                        Message::OpenMpvConfigDirectory,
-                    )],
-                ))
-                .push(self.group(
-                    SECTION_TITLES[5],
-                    column![self.action(
-                        RESET_SERVER_CONTROL,
-                        "Reset Saved Server",
-                        Message::ResetSavedServer,
-                    )],
-                ));
+            controls = controls.push(self.group(
+                SECTION_TITLES[5],
+                column![self.action(
+                    RESET_SERVER_CONTROL,
+                    "Reset Saved Server",
+                    Message::ResetSavedServer,
+                )],
+            ));
         }
 
         scrollable(controls)
             .id(SETTINGS_SCROLL)
             .height(Length::Fill)
+            .spacing(16)
             .into()
     }
 
@@ -314,6 +332,10 @@ impl Settings {
                 jfn_mpv::api::jfn_mpv_set_volume_scale(jfn_config::volume_scale());
             }
             Message::ForceTranscodingChanged(value) => jfn_config::set_force_transcoding(value),
+            Message::ThemeChanged(value) => {
+                jfn_config::set_theme(&value);
+                theme::publish_menu_palette();
+            }
             Message::WindowDecorationsChanged(value) => {
                 jfn_config::set_window_decorations(value.map(WindowDecorations::as_str));
             }
@@ -349,10 +371,6 @@ impl Settings {
         Outcome::None
     }
 
-    pub fn focus_target(&self) -> Option<Id> {
-        Some(AUDIO_PASSTHROUGH_FIELD)
-    }
-
     #[cfg(test)]
     pub(crate) fn testing() -> Self {
         Self {
@@ -369,9 +387,14 @@ impl Settings {
         title: &'a str,
         controls: iced_widget::Column<'a, Message, Theme, iced_wgpu::Renderer>,
     ) -> Element<'a, Message, Theme, iced_wgpu::Renderer> {
-        column![text(title).size(20), controls.spacing(16)]
-            .spacing(10)
-            .into()
+        column![
+            text(title)
+                .size(theme::HEADING_SIZE)
+                .class(theme::TextClass::Heading),
+            controls.spacing(20)
+        ]
+        .spacing(12)
+        .into()
     }
 
     fn setting<'a>(
@@ -383,7 +406,9 @@ impl Settings {
         column![
             text(label),
             control,
-            text(help).size(13).class(Some(theme::MUTED))
+            text(help)
+                .size(theme::HELP_SIZE)
+                .class(theme::TextClass::Muted)
         ]
         .spacing(5)
         .into()
@@ -412,7 +437,9 @@ impl Settings {
                 checkbox(value).label(label).on_toggle(changed),
                 changed(!value),
             ),
-            text(help).size(13).class(Some(theme::MUTED)),
+            text(help)
+                .size(theme::HELP_SIZE)
+                .class(theme::TextClass::Muted),
         ]
         .spacing(5)
         .into()
@@ -464,6 +491,7 @@ fn control_order(display: DisplayBackend, decorations: bool, server: bool) -> Ve
         CHANNEL_LAYOUT_CONTROL,
         VOLUME_BOOST_CONTROL,
         FORCE_TRANSCODE_CONTROL,
+        THEME_CONTROL,
     ];
     if decorations {
         ids.push(WINDOW_DECORATION_CONTROL);
@@ -471,11 +499,30 @@ fn control_order(display: DisplayBackend, decorations: bool, server: bool) -> Ve
     if transparent_titlebar_visible(display) {
         ids.push(TRANSPARENT_TITLEBAR_CONTROL);
     }
-    ids.extend([HIDE_SCROLLBAR_CONTROL, DEVICE_NAME_FIELD, LOG_LEVEL_CONTROL]);
+    ids.extend([
+        HIDE_SCROLLBAR_CONTROL,
+        DEVICE_NAME_FIELD,
+        LOG_LEVEL_CONTROL,
+        OPEN_MPV_CONFIG_CONTROL,
+    ]);
     if server {
-        ids.extend([OPEN_MPV_CONFIG_CONTROL, RESET_SERVER_CONTROL]);
+        ids.push(RESET_SERVER_CONTROL);
     }
     ids
+}
+
+fn hwdec_label(value: &str) -> String {
+    match value {
+        "auto" => "Auto",
+        "no" => "Off",
+        "vaapi" => "VA-API",
+        "nvdec" => "NVDEC",
+        "vulkan" => "Vulkan",
+        "d3d11va" => "D3D11VA",
+        "videotoolbox" => "VideoToolbox",
+        value => value,
+    }
+    .to_owned()
 }
 
 fn audio_channel_label(value: &str) -> String {
@@ -592,15 +639,14 @@ mod tests {
     }
 
     #[test]
-    fn labels_and_empty_audio_focus_target_are_stable() {
+    fn labels_are_stable() {
+        assert_eq!(hwdec_label("no"), "Off");
+        assert_eq!(hwdec_label("vaapi"), "VA-API");
         assert_eq!(audio_channel_label(""), "Auto");
         assert_eq!(audio_channel_label("5.1"), "5.1 Surround");
         assert_eq!(log_level_label(""), "Default (Info)");
         assert_eq!(volume_boost_label(""), "Off (100%)");
         assert_eq!(volume_boost_label("150"), "150%");
-        let settings = Settings::testing();
-        assert!(settings.audio_passthrough.is_empty());
-        assert_eq!(settings.focus_target(), Some(AUDIO_PASSTHROUGH_FIELD));
     }
 
     #[test]
@@ -629,6 +675,7 @@ mod tests {
                 CHANNEL_LAYOUT_CONTROL,
                 VOLUME_BOOST_CONTROL,
                 FORCE_TRANSCODE_CONTROL,
+                THEME_CONTROL,
                 WINDOW_DECORATION_CONTROL,
                 HIDE_SCROLLBAR_CONTROL,
                 DEVICE_NAME_FIELD,
@@ -646,10 +693,12 @@ mod tests {
                 CHANNEL_LAYOUT_CONTROL,
                 VOLUME_BOOST_CONTROL,
                 FORCE_TRANSCODE_CONTROL,
+                THEME_CONTROL,
                 TRANSPARENT_TITLEBAR_CONTROL,
                 HIDE_SCROLLBAR_CONTROL,
                 DEVICE_NAME_FIELD,
                 LOG_LEVEL_CONTROL,
+                OPEN_MPV_CONFIG_CONTROL,
             ]
         );
     }

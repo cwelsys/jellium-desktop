@@ -6,32 +6,52 @@ use tiny_skia::{Color as SkColor, FillRule, Paint, PathBuilder, Pixmap, Rect, Tr
 use jfn_platform_abi::{MenuItem, Scale};
 
 // Logical (unscaled) metrics; multiplied by the display scale at layout time.
-const FONT_PX: f32 = 13.0;
+const FONT_PX: f32 = 15.0;
 /// Row, separator and vertical-padding heights in logical pixels, whole
 /// counts: their physical values are [`Scale::to_physical`] of these, with no
 /// float round-trip.
-const ROW_H: i32 = 28;
+const ROW_H: i32 = 32;
 const SEP_H: i32 = 9;
 const PAD_Y: i32 = 4;
-const PAD_X: f32 = 12.0;
+const PAD_X: f32 = 14.0;
 const PAD_RIGHT: f32 = 24.0;
-const MIN_W: f32 = 160.0;
+const MIN_W: f32 = 180.0;
 const RADIUS: f32 = 4.0;
 
-fn bg() -> SkColor {
-    SkColor::from_rgba8(0x2b, 0x2b, 0x2b, 0xff)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MenuPalette {
+    pub background: [u8; 3],
+    pub border: [u8; 3],
+    pub hover: [u8; 3],
+    pub separator: [u8; 3],
+    pub text: [u8; 3],
+    pub text_disabled: [u8; 3],
 }
-fn border() -> SkColor {
-    SkColor::from_rgba8(0x55, 0x55, 0x55, 0xff)
+
+impl MenuPalette {
+    pub const DEFAULT: MenuPalette = MenuPalette {
+        background: [0x2b, 0x2b, 0x2b],
+        border: [0x55, 0x55, 0x55],
+        hover: [0x3d, 0x3d, 0x3d],
+        separator: [0x44, 0x44, 0x44],
+        text: [0xe0, 0xe0, 0xe0],
+        text_disabled: [0x88, 0x88, 0x88],
+    };
 }
-fn hover() -> SkColor {
-    SkColor::from_rgba8(0x3d, 0x3d, 0x3d, 0xff)
+
+static PALETTE: parking_lot::Mutex<MenuPalette> = parking_lot::Mutex::new(MenuPalette::DEFAULT);
+
+pub fn set_palette(palette: MenuPalette) {
+    *PALETTE.lock() = palette;
 }
-fn sep() -> SkColor {
-    SkColor::from_rgba8(0x44, 0x44, 0x44, 0xff)
+
+fn sk([r, g, b]: [u8; 3]) -> SkColor {
+    SkColor::from_rgba8(r, g, b, 0xff)
 }
-const TEXT: Color = Color::rgb(0xe0, 0xe0, 0xe0);
-const TEXT_DISABLED: Color = Color::rgb(0x66, 0x66, 0x66);
+
+fn glyph([r, g, b]: [u8; 3]) -> Color {
+    Color::rgb(r, g, b)
+}
 
 /// Geometry in physical pixels relative to the menu's top-left.
 #[derive(Clone)]
@@ -198,6 +218,7 @@ pub fn paint(
     active: i32,
 ) -> Option<Pixmap> {
     let s = layout.scale.as_f32();
+    let palette = *PALETTE.lock();
     let mut pm = Pixmap::new(layout.width as u32, layout.height as u32)?;
 
     let w = layout.width as f32;
@@ -206,7 +227,7 @@ pub fn paint(
 
     if let Some(path) = rounded_rect(0.5, 0.5, w - 1.0, h - 1.0, radius) {
         let mut bgp = Paint::default();
-        bgp.set_color(bg());
+        bgp.set_color(sk(palette.background));
         bgp.anti_alias = true;
         pm.fill_path(&path, &bgp, FillRule::Winding, Transform::identity(), None);
 
@@ -215,7 +236,7 @@ pub fn paint(
             ..Default::default()
         };
         let mut bp = Paint::default();
-        bp.set_color(border());
+        bp.set_color(sk(palette.border));
         bp.anti_alias = true;
         pm.stroke_path(&path, &bp, &stroke, Transform::identity(), None);
     }
@@ -232,7 +253,7 @@ pub fn paint(
                 (1.0 * s).max(1.0),
             ) {
                 let mut p = Paint::default();
-                p.set_color(sep());
+                p.set_color(sk(palette.separator));
                 pm.fill_rect(rect, &p, Transform::identity(), None);
             }
             continue;
@@ -242,11 +263,15 @@ pub fn paint(
             && let Some(rect) = Rect::from_xywh(1.0, row.y as f32, w - 2.0, row.h as f32)
         {
             let mut p = Paint::default();
-            p.set_color(hover());
+            p.set_color(sk(palette.hover));
             pm.fill_rect(rect, &p, Transform::identity(), None);
         }
 
-        let color = if it.enabled { TEXT } else { TEXT_DISABLED };
+        let color = glyph(if it.enabled {
+            palette.text
+        } else {
+            palette.text_disabled
+        });
         let baseline_y = row.y as f32 + (row.h as f32 - font_px) / 2.0;
         draw_text(fonts, &mut pm, &it.label, font_px, pad_x, baseline_y, color);
     }

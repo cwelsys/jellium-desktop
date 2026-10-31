@@ -54,6 +54,7 @@ impl Painter {
             engine,
             iced_core::renderer::Settings {
                 default_font: crate::shell::theme::FONT,
+                default_text_size: crate::shell::theme::TEXT_SIZE.into(),
                 ..iced_core::renderer::Settings::default()
             },
         );

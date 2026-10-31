@@ -73,7 +73,7 @@ impl About {
                 let message = Message::OpenPath(path);
                 controls::action(
                     id,
-                    button(wrapped(value).class(Some(theme::LINK)))
+                    button(wrapped(value).class(theme::TextClass::Link))
                         .on_press(message.clone())
                         .class(theme::ButtonClass::Chrome)
                         .padding(0),
@@ -82,7 +82,7 @@ impl About {
             }
             None => wrapped(value).into(),
         };
-        metadata_row(wrapped(label).class(Some(theme::MUTED)), value)
+        metadata_row(wrapped(label).class(theme::TextClass::Muted), value)
     }
 
     /// Opens the row's path through `Platform::open_path`.

@@ -608,9 +608,11 @@ impl Loop {
             inputs: crate::shell::chrome::inputs(),
             theme: Theme {
                 chrome_background: crate::shell::theme::chrome_background(),
+                palette: crate::shell::theme::Palette::current(),
                 ..Theme::default()
             },
         };
+        crate::shell::theme::publish_menu_palette();
         let waker = shell::Waker::new({
             let wake = Arc::clone(&wake);
             move || wake()
@@ -795,6 +797,7 @@ impl Loop {
                 .map_or_else(Deadline::none, Deadline::at),
         );
         self.model.theme.backdrop = self.model.backdrop();
+        self.model.theme.palette = crate::shell::theme::Palette::current();
         let plan = self.focus.plan(&mut self.model);
 
         let this = &mut *self;
@@ -1099,7 +1102,9 @@ fn paint(
                 ui.draw(
                     painter.renderer(),
                     &model.theme,
-                    &renderer::Style::default(),
+                    &renderer::Style {
+                        text_color: model.theme.palette.text,
+                    },
                     cursor,
                 );
                 Painted::Shown(painter.present(frame))
