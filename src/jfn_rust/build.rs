@@ -157,10 +157,13 @@ fn track_git_refs(repo_root: &std::path::Path) {
     );
     if let Ok(Some(r)) = repo.head_ref() {
         let name = r.name().as_bstr().to_string();
-        println!(
-            "cargo:rerun-if-changed={}",
-            repo.common_dir().join(name).display()
-        );
+        let loose = repo.common_dir().join(name);
+        let watched = if loose.exists() {
+            loose.as_path()
+        } else {
+            loose.parent().unwrap_or(&loose)
+        };
+        println!("cargo:rerun-if-changed={}", watched.display());
     }
 }
 
