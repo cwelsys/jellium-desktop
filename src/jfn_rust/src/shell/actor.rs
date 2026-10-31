@@ -537,6 +537,7 @@ struct Loop {
     last_primary: Option<(Id, u64)>,
     /// The first draw waits for the bundled font; every later one does not.
     drew_nothing_yet: bool,
+    hidden_since_present: bool,
 }
 
 fn run(
@@ -639,6 +640,7 @@ impl Loop {
             deferred: Vec::new(),
             last_primary: None,
             drew_nothing_yet: true,
+            hidden_since_present: false,
         })
     }
 
@@ -868,6 +870,7 @@ impl Loop {
                 model,
                 this.cursor,
                 &this.redraw,
+                &mut this.hidden_since_present,
             ) {
                 Painted::Shown(_) | Painted::Hidden | Painted::Requested => {}
                 Painted::Deferred(retry_at) => {
@@ -896,7 +899,9 @@ impl Loop {
         }
         this.immediate = true;
         publish(&this.model, this.current);
-        apply_visibility(this.surface, &this.model);
+        if apply_visibility(this.surface, &this.model) == Visibility::Hidden {
+            this.hidden_since_present = true;
+        }
     }
 }
 
@@ -1072,8 +1077,15 @@ fn paint(
     model: &Model,
     cursor: Cursor,
     redraw: &Redraw,
+    hidden_since_present: &mut bool,
 ) -> Painted {
-    match apply_visibility(surface, model) {
+    let visibility = apply_visibility(surface, model);
+    if visibility == Visibility::Hidden {
+        *hidden_since_present = true;
+    } else if std::mem::take(hidden_since_present) {
+        painter.recreate_swapchain();
+    }
+    match visibility {
         Visibility::Hidden => Painted::Hidden,
         Visibility::Shown => match painter.acquire() {
             Acquired::Deferred(deferred) => match deferred.retry_at() {

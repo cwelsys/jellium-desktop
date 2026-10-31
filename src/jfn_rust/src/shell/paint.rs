@@ -71,6 +71,10 @@ impl Painter {
         hint_scale(&mut self.renderer, extent);
     }
 
+    pub fn recreate_swapchain(&mut self) {
+        self.swapchain.recreate();
+    }
+
     pub fn renderer(&mut self) -> &mut Renderer {
         &mut self.renderer
     }

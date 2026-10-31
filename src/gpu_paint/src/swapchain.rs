@@ -76,6 +76,10 @@ impl<'ctx> Swapchain<'ctx> {
         self.ctx.configure_surface(&self.surface, &self.config);
     }
 
+    pub fn recreate(&mut self) {
+        self.configure();
+    }
+
     /// Reconfigure to `size`, under the write side of the submit gate.
     pub fn resize(&mut self, size: FrameSize) {
         let Some((w, h)) = texels(size) else {
