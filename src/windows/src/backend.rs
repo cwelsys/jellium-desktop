@@ -296,7 +296,10 @@ impl Platform for WindowsPlatform {
     fn menu_delivery(&self, kind: MenuKind) -> MenuDelivery<'_> {
         match kind {
             MenuKind::ContextMenu => MenuDelivery::Host(&crate::menu::WinMenuHost),
-            MenuKind::Dropdown => MenuDelivery::Composited,
+            // CEF dismisses the OSR <select> popup within milliseconds of
+            // OnPopupShow, before painting it, so a composited popup never
+            // shows; the page menu sets the <select> directly
+            MenuKind::Dropdown => MenuDelivery::Page,
         }
     }
 
@@ -323,6 +326,10 @@ impl Platform for WindowsPlatform {
             locales_dir_path: Some(dir.join("locales")),
             ..Default::default()
         }
+    }
+
+    fn on_window_handle_changed(&self, id: i64) {
+        crate::platform::win_on_window_handle_changed(id);
     }
 
     fn set_fullscreen(&self, v: bool) {
