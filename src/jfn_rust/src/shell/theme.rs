@@ -236,7 +236,12 @@ impl iced_core::widget::text::Catalog for Theme {
                 TextClass::Heading => Some(p.heading),
                 TextClass::Link => Some(p.link),
             },
+            selection: None,
         }
+    }
+
+    fn selection(&self) -> Color {
+        self.palette.accent_fill
     }
 }
 
@@ -379,6 +384,10 @@ impl iced_widget::checkbox::Catalog for Theme {
             },
             text_color: Some(p.text),
         }
+    }
+
+    fn selection(&self) -> Color {
+        self.palette.accent_fill
     }
 }
 
