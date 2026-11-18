@@ -2937,6 +2937,7 @@ dependencies = [
  "nix",
  "parking_lot",
  "smithay-client-toolkit",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "wayland-backend",
