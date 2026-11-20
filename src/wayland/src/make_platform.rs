@@ -122,8 +122,12 @@ impl Platform for WaylandPlatform {
         crate::lifecycle::init(self.rt())
     }
 
-    fn cleanup(&self, _access: &jfn_platform_abi::LifecycleAccess) {
-        crate::lifecycle::cleanup(self.rt());
+    fn cleanup(
+        &self,
+        _access: &jfn_platform_abi::LifecycleAccess,
+    ) -> Result<(), jfn_platform_abi::DetachError> {
+        crate::lifecycle::cleanup(self.rt())
+            .map_err(|e| jfn_platform_abi::DetachError::new("Wayland menu shutdown", e))
     }
 
     fn post_window_cleanup(
@@ -137,8 +141,12 @@ impl Platform for WaylandPlatform {
         stopped.map_err(|e| jfn_platform_abi::HostReleaseError::new("mpv proxy socket removal", e))
     }
 
-    fn alloc_surface(&self, initial: Visibility) -> SurfaceHandle {
-        SurfaceHandle::from_ptr(wl_ops::alloc_surface(self.rt(), initial) as *mut c_void)
+    fn alloc_surface(
+        &self,
+        initial: Visibility,
+        placement: jfn_platform_abi::SurfacePlacement,
+    ) -> SurfaceHandle {
+        SurfaceHandle::from_ptr(wl_ops::alloc_surface(self.rt(), initial, placement) as *mut c_void)
     }
 
     fn free_surface(&self, s: SurfaceHandle) {
@@ -160,13 +168,7 @@ impl Platform for WaylandPlatform {
         )
     }
 
-    fn surface_resize(&self, s: SurfaceHandle, size: SurfaceSize) {
-        wl_ops::surface_resize(
-            self.rt(),
-            s.as_ptr() as *mut crate::wl_state::PlatformSurface,
-            size,
-        );
-    }
+    fn surface_resize(&self, _s: SurfaceHandle, _size: SurfaceSize) {}
 
     fn surface_window_target(&self, s: SurfaceHandle) -> Option<jfn_platform_abi::WindowTarget> {
         wl_ops::window_target(
@@ -183,7 +185,7 @@ impl Platform for WaylandPlatform {
         )
     }
 
-    fn apply_stack(&self, ordered: &[SurfaceHandle]) {
+    fn apply_stack(&self, ordered: &[SurfaceHandle]) -> Result<(), jfn_platform_abi::StackError> {
         // SAFETY: a `&[SurfaceHandle]` (i.e. `&[*mut c_void]`) and a
         // `&[*mut PlatformSurface]` have identical layout; each handle was
         // minted by this backend's `alloc_surface`.
@@ -193,7 +195,8 @@ impl Platform for WaylandPlatform {
                 ordered.len(),
             )
         };
-        wl_ops::restack(self.rt(), typed);
+        wl_ops::restack(self.rt(), typed)
+            .map_err(|e| jfn_platform_abi::StackError::new("Wayland restack", e))
     }
 
     fn menu_delivery(
@@ -211,7 +214,7 @@ impl Platform for WaylandPlatform {
         &jfn_mpris::MprisSink
     }
 
-    fn cef_paths(&self) -> jfn_platform_abi::CefPaths {
+    fn cef_paths(&self) -> std::io::Result<jfn_platform_abi::CefPaths> {
         jfn_linux_util::cef_paths()
     }
 
@@ -237,9 +240,9 @@ impl Platform for WaylandPlatform {
     // constrains saved geometry
     fn clamp_window_geometry(
         &self,
-        g: jfn_platform_abi::WindowGeometry,
-    ) -> jfn_platform_abi::WindowGeometry {
-        g
+        g: &jfn_platform_abi::WindowGeometry,
+    ) -> Result<jfn_platform_abi::PlacedGeometry, jfn_platform_abi::geometry::ClampError> {
+        Ok(g.on_primary())
     }
 
     // the Wayland event loop runs on its own thread; the app main thread has
@@ -260,8 +263,8 @@ impl Platform for WaylandPlatform {
         self.rt().root().toggle_fullscreen();
     }
 
-    fn scale(&self) -> jfn_platform_abi::Scale {
-        self.rt().window().scale()
+    fn scale(&self) -> Result<jfn_platform_abi::Scale, jfn_platform_abi::WindowStateError> {
+        Ok(self.rt().window().scale())
     }
 
     /// The output containing `at`, else the first usable output. When the
@@ -283,8 +286,10 @@ impl Platform for WaylandPlatform {
     }
 
     // the compositor tells no client where its window is
-    fn query_window_position(&self) -> Option<jfn_platform_abi::WindowPos> {
-        None
+    fn window_position(
+        &self,
+    ) -> Result<Option<jfn_platform_abi::WindowPlacement>, jfn_platform_abi::WindowStateError> {
+        Ok(None)
     }
 
     fn set_cursor(&self, shape: CursorShape) {
@@ -327,6 +332,12 @@ impl Platform for WaylandPlatform {
 
     fn effective_decorations(&self) -> jfn_platform_abi::EffectiveDecorations {
         self.rt().root().effective_decorations()
+    }
+
+    fn set_titlebar_present(&self, present: bool) {
+        if let Err(e) = self.rt().window().set_titlebar_present(self.rt(), present) {
+            tracing::error!(target: "Main", "titlebar presence: {e}; surfaces left unplaced");
+        }
     }
 
     fn shared_texture_supported(&self) -> bool {

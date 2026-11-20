@@ -31,7 +31,8 @@ use std::ffi::c_int;
 
 use jfn_gpu_paint::{FrameSize, Pixels, WindowTarget};
 use jfn_platform_abi::{
-    Ack, Content, PaintFrame, Presented, SurfaceHandle, SurfaceSize, Visibility, VisibilityCommit,
+    Ack, Content, PaintFrame, Presented, SurfaceHandle, SurfaceSize, Unrepresentable, Visibility,
+    VisibilityCommit, WindowStateError,
 };
 use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
@@ -232,13 +233,13 @@ pub(crate) fn free(h: SurfaceHandle) {
 /// surfaces `ordered` does not name keep their relative order above those it
 /// does, so every live surface stays parented. Video needs no placing: the
 /// composition target is mpv's own HWND, so every visual is above it.
-pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
+pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) -> windows::core::Result<()> {
     let mut st = STATE.lock();
     let Registry {
         devices, surfaces, ..
     } = &mut *st;
     let Some(root) = devices.as_ref().map(Devices::root) else {
-        return;
+        return Ok(());
     };
     let rank = |e: &Entry| ordered.iter().position(|h| h.id() == e.id.0);
 
@@ -248,6 +249,7 @@ pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
     named.sort_by_key(|e| rank(e).unwrap_or(usize::MAX));
     named.append(&mut unnamed);
 
+    let mut first_failure = None;
     unsafe {
         for entry in &named {
             let _ = root.RemoveVisual(entry.content.visual());
@@ -262,7 +264,7 @@ pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
             match placed {
                 Ok(()) => prev = Some(visual),
                 Err(e) => {
-                    tracing::error!(target: "platform", "apply_stack AddVisual failed: {e:?}");
+                    first_failure.get_or_insert(e);
                 }
             }
         }
@@ -270,6 +272,7 @@ pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
 
     *surfaces = named;
     st.commit();
+    first_failure.map_or(Ok(()), Err)
 }
 
 /// Set a surface's content visual to `visibility`, publish it, and wait for
@@ -342,13 +345,12 @@ pub(crate) fn present<'a>(
     Ok(frame.present(|_content| Presented::issued()))
 }
 
-/// Offsets the content visual by the reserved top inset and sizes it to match.
-pub(crate) fn resize(h: SurfaceHandle, size: SurfaceSize) {
+pub(crate) fn resize(h: SurfaceHandle, _size: SurfaceSize) {
     let mut st = STATE.lock();
     let Some(entry) = st.find_mut(h) else {
         return;
     };
-    entry.content.set_offset(0.0, size.physical_top as f32);
+    entry.content.set_offset(0.0, 0.0);
     st.commit();
 }
 
@@ -361,20 +363,27 @@ pub(crate) fn window_target(h: SurfaceHandle) -> Option<WindowTarget> {
     st.find_mut(h)?.content.window_target()
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, thiserror::Error)]
+pub(crate) enum PopupPlaceError {
+    #[error(transparent)]
+    Scale(#[from] WindowStateError),
+    #[error(transparent)]
+    Offset(#[from] Unrepresentable),
+}
+
 /// Place the popup visual at `x`, `y` — logical pixels inside the owning
 /// surface. The popup shows itself with its first frame.
-pub(crate) fn popup_show(h: SurfaceHandle, x: c_int, y: c_int) {
-    let scale = crate::platform::win_get_scale();
-    let (Some(px), Some(py)) = (scale.to_physical(x), scale.to_physical(y)) else {
-        tracing::error!(target: "platform", "popup offset {x},{y} is unrepresentable at scale {scale}");
-        return;
-    };
+pub(crate) fn popup_show(h: SurfaceHandle, x: c_int, y: c_int) -> Result<(), PopupPlaceError> {
+    let scale = crate::platform::win_get_scale()?;
+    let px = scale.to_physical(x)?;
+    let py = scale.to_physical(y)?;
     let mut st = STATE.lock();
     let Some(entry) = st.find_mut(h) else {
-        return;
+        return Ok(());
     };
     entry.popup.set_offset(px as f32, py as f32);
     st.commit();
+    Ok(())
 }
 
 /// Detach the popup visual's content, so reopening it cannot flash the frame

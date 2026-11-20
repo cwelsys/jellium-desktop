@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use crossbeam_utils::atomic::AtomicCell;
 use jfn_mpv::{Event, ObserveId, PropertyValue};
-use jfn_platform_abi::{LogicalSize, PhysicalSize, Scale, WindowExtent};
+use jfn_platform_abi::{
+    ExtentError, LogicalSize, PhysicalSize, Scale, WindowExtent, WindowStateError,
+};
 
 use crate::coordinator::Input;
 use crate::types::{EndReason, PlaybackBufferedRange};
@@ -38,11 +40,21 @@ pub mod observe_id {
 
 const MAX_BUFFERED_RANGES: usize = 8;
 
+#[derive(Debug, thiserror::Error)]
+pub enum IngestError {
+    #[error(transparent)]
+    OsdDimsRange(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    OsdDimsExtent(#[from] ExtentError),
+    #[error("window scale: {0}")]
+    Scale(#[from] WindowStateError),
+}
+
 /// Caller-provided platform hooks. Implementations stay outside this crate so
 /// jfn-playback doesn't grow a platform dep.
 pub trait IngestCtx {
     /// The display scale the platform reports.
-    fn scale(&self) -> Scale;
+    fn scale(&self) -> Result<Scale, WindowStateError>;
 
     /// The app window's logical size where the OS, not mpv's
     /// `osd-dimensions`, is the authority for it.
@@ -123,7 +135,7 @@ pub(crate) fn ingest_event_for_ffi<C: IngestCtx>(
     event: &Event,
     state: &IngestState,
     ctx: &C,
-) -> Vec<IngestOut> {
+) -> Result<Vec<IngestOut>, IngestError> {
     ingest(event, state, ctx)
 }
 
@@ -134,19 +146,23 @@ pub(crate) fn ingest_property_for_ffi<C: IngestCtx>(
     value: &PropertyValue,
     state: &IngestState,
     ctx: &C,
-) -> Vec<IngestOut> {
+) -> Result<Vec<IngestOut>, IngestError> {
     digest_property(id, value, state, ctx)
 }
 
-pub(crate) fn ingest<C: IngestCtx>(event: &Event, state: &IngestState, ctx: &C) -> Vec<IngestOut> {
-    match event {
+pub(crate) fn ingest<C: IngestCtx>(
+    event: &Event,
+    state: &IngestState,
+    ctx: &C,
+) -> Result<Vec<IngestOut>, IngestError> {
+    Ok(match event {
         Event::Shutdown => vec![IngestOut::Shutdown],
         Event::FileLoaded => vec![IngestOut::Input(Input::FileLoaded)],
         Event::EndFile(reason) => Some(end_file_input(reason))
             .into_iter()
             .map(IngestOut::Input)
             .collect(),
-        Event::PropertyChange { id, value, .. } => digest_property(*id, value, state, ctx),
+        Event::PropertyChange { id, value, .. } => digest_property(*id, value, state, ctx)?,
         Event::ClientMessage(args) => {
             // mpv scripts may send their own client messages; only the
             // CLOSE_WIN binding's `jfn-close` concerns us.
@@ -157,7 +173,7 @@ pub(crate) fn ingest<C: IngestCtx>(event: &Event, state: &IngestState, ctx: &C) 
             }
         }
         _ => Vec::new(),
-    }
+    })
 }
 
 fn end_file_input(reason: &jfn_mpv::EndFileReason) -> Input {
@@ -187,10 +203,10 @@ fn digest_property<C: IngestCtx>(
     value: &PropertyValue,
     state: &IngestState,
     ctx: &C,
-) -> Vec<IngestOut> {
+) -> Result<Vec<IngestOut>, IngestError> {
     use observe_id::*;
-    match id {
-        OSD_DIMS => digest_osd_dims(value, state, ctx).into_iter().collect(),
+    Ok(match id {
+        OSD_DIMS => digest_osd_dims(value, state, ctx)?,
         PAUSE => as_flag(value)
             .map(|f| vec![IngestOut::Input(Input::PauseChanged(f))])
             .unwrap_or_default(),
@@ -230,7 +246,7 @@ fn digest_property<C: IngestCtx>(
             if let Some(id) = as_int(value) {
                 let previous = state.window_id.swap(id, Ordering::Relaxed);
                 if id != previous {
-                    return vec![IngestOut::WindowHandleChanged(id)];
+                    return Ok(vec![IngestOut::WindowHandleChanged(id)]);
                 }
             }
             Vec::new()
@@ -243,51 +259,47 @@ fn digest_property<C: IngestCtx>(
         }
         DISPLAY_FPS => {
             let Some(fps) = as_double(value) else {
-                return Vec::new();
+                return Ok(Vec::new());
             };
             if fps == state.display_hz() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             state.display_hz.store(fps);
             vec![IngestOut::Input(Input::DisplayHz(fps))]
         }
         CACHE_STATE => digest_cache_state(value),
         _ => Vec::new(),
-    }
+    })
 }
 
 fn digest_osd_dims<C: IngestCtx>(
     value: &PropertyValue,
     state: &IngestState,
     ctx: &C,
-) -> Vec<IngestOut> {
+) -> Result<Vec<IngestOut>, IngestError> {
     let PropertyValue::Node(node) = value else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let w = node.get("w").and_then(|v| v.as_int()).unwrap_or(0);
     let h = node.get("h").and_then(|v| v.as_int()).unwrap_or(0);
     if w <= 0 || h <= 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let (Ok(w), Ok(h)) = (i32::try_from(w), i32::try_from(h)) else {
-        return Vec::new();
-    };
+    let (w, h) = (i32::try_from(w)?, i32::try_from(h)?);
     let physical = PhysicalSize { w, h };
-    let scale = ctx.scale();
+    let scale = ctx.scale()?;
     let extent = match ctx.os_logical_size().filter(|l| l.w > 0 && l.h > 0) {
         Some(logical) => extent_at(scale, logical),
         None => extent_of(scale, physical),
     };
-    let Some(extent) = extent else {
-        return Vec::new();
-    };
+    let extent = extent?;
     state.set_window_extent(extent);
-    vec![IngestOut::WindowExtentChanged]
+    Ok(vec![IngestOut::WindowExtentChanged])
 }
 
 /// The extent a reported scale and an exact logical content size name; the
 /// physical size is the single conversion of the logical one.
-pub(crate) fn extent_at(scale: Scale, logical: LogicalSize) -> Option<WindowExtent> {
+pub(crate) fn extent_at(scale: Scale, logical: LogicalSize) -> Result<WindowExtent, ExtentError> {
     WindowExtent::new(logical.to_physical(scale)?, scale, logical)
 }
 
@@ -295,10 +307,7 @@ pub(crate) fn extent_at(scale: Scale, logical: LogicalSize) -> Option<WindowExte
 ///
 /// mpv's pixel size is carried through verbatim; the logical size is the
 /// single conversion of it.
-///
-/// `None` when the division names no logical size, or when either axis is
-/// below two pixels.
-pub(crate) fn extent_of(scale: Scale, physical: PhysicalSize) -> Option<WindowExtent> {
+pub(crate) fn extent_of(scale: Scale, physical: PhysicalSize) -> Result<WindowExtent, ExtentError> {
     WindowExtent::new(physical, scale, physical.to_logical(scale)?)
 }
 
@@ -352,15 +361,15 @@ fn as_double(v: &PropertyValue) -> Option<f64> {
 mod tests {
     use super::*;
     use jfn_mpv::Node;
-    use jfn_platform_abi::COVERED_SCALES;
+    use jfn_platform_abi::{COVERED_SCALES, Unrepresentable};
 
     struct TestCtx {
         scale: Scale,
         mac: Option<LogicalSize>,
     }
     impl IngestCtx for TestCtx {
-        fn scale(&self) -> Scale {
-            self.scale
+        fn scale(&self) -> Result<Scale, WindowStateError> {
+            Ok(self.scale)
         }
         fn os_logical_size(&self) -> Option<LogicalSize> {
             self.mac
@@ -375,6 +384,10 @@ mod tests {
         TestCtx { scale, mac: None }
     }
 
+    fn ingest_ok(event: &Event, state: &IngestState, ctx: &TestCtx) -> Vec<IngestOut> {
+        ingest(event, state, ctx).unwrap()
+    }
+
     fn prop(id: u64, value: PropertyValue) -> Event {
         Event::PropertyChange {
             id,
@@ -386,7 +399,7 @@ mod tests {
     #[test]
     fn pause_flag_round_trips() {
         let state = IngestState::new();
-        let out = ingest(
+        let out = ingest_ok(
             &prop(observe_id::PAUSE, PropertyValue::Flag(true)),
             &state,
             &ctx(Scale::ONE),
@@ -398,7 +411,7 @@ mod tests {
     #[test]
     fn time_pos_scales_to_microseconds() {
         let state = IngestState::new();
-        let out = ingest(
+        let out = ingest_ok(
             &prop(observe_id::TIME_POS, PropertyValue::Double(1.5)),
             &state,
             &ctx(Scale::ONE),
@@ -413,7 +426,7 @@ mod tests {
     fn window_replacement_is_observed_without_rebinding_repeated_handles() {
         let state = IngestState::new();
         for id in [101, 202] {
-            let out = ingest(
+            let out = ingest_ok(
                 &prop(observe_id::WINDOW_ID, PropertyValue::Int(id)),
                 &state,
                 &ctx(Scale::ONE),
@@ -421,7 +434,7 @@ mod tests {
             assert!(matches!(out.as_slice(), [IngestOut::WindowHandleChanged(got)] if *got == id));
             assert_eq!(state.window_id(), Some(id));
             assert!(
-                ingest(
+                ingest_ok(
                     &prop(observe_id::WINDOW_ID, PropertyValue::Int(id)),
                     &state,
                     &ctx(Scale::ONE)
@@ -435,12 +448,12 @@ mod tests {
     fn fullscreen_carries_maximized_when_entering() {
         let state = IngestState::new();
         // Window first reports maximized true.
-        let _ = ingest(
+        let _ = ingest_ok(
             &prop(observe_id::WINDOW_MAX, PropertyValue::Flag(true)),
             &state,
             &ctx(Scale::ONE),
         );
-        let out = ingest(
+        let out = ingest_ok(
             &prop(observe_id::FULLSCREEN, PropertyValue::Flag(true)),
             &state,
             &ctx(Scale::ONE),
@@ -456,7 +469,7 @@ mod tests {
         assert!(was_maximized);
 
         // Leaving fullscreen always reports was_maximized = false.
-        let out = ingest(
+        let out = ingest_ok(
             &prop(observe_id::FULLSCREEN, PropertyValue::Flag(false)),
             &state,
             &ctx(Scale::ONE),
@@ -475,7 +488,7 @@ mod tests {
 
     fn digest_dims(state: &IngestState, w: i64, h: i64, scale: Scale) {
         let node = Node::Map(vec![("w".into(), Node::Int(w)), ("h".into(), Node::Int(h))]);
-        let _ = ingest(
+        let _ = ingest_ok(
             &prop(observe_id::OSD_DIMS, PropertyValue::Node(node)),
             state,
             &ctx(scale),
@@ -486,14 +499,14 @@ mod tests {
     fn display_fps_suppresses_duplicates() {
         let state = IngestState::new();
         let v = PropertyValue::Double(60.0);
-        let out = ingest(
+        let out = ingest_ok(
             &prop(observe_id::DISPLAY_FPS, v.clone()),
             &state,
             &ctx(Scale::ONE),
         );
         matches!(out[0], IngestOut::Input(Input::DisplayHz(_)));
         assert_eq!(state.display_hz(), 60.0);
-        let out = ingest(&prop(observe_id::DISPLAY_FPS, v), &state, &ctx(Scale::ONE));
+        let out = ingest_ok(&prop(observe_id::DISPLAY_FPS, v), &state, &ctx(Scale::ONE));
         assert!(out.is_empty());
     }
 
@@ -505,7 +518,7 @@ mod tests {
             ("h".into(), Node::Int(2160)),
         ]);
         let observed = ratio(2, 1).map(|two| {
-            let out = ingest(
+            let out = ingest_ok(
                 &prop(observe_id::OSD_DIMS, PropertyValue::Node(node)),
                 &state,
                 &ctx(two),
@@ -540,7 +553,7 @@ mod tests {
         let observed = ratio(2, 1).map(|two| {
             let mut c = ctx(two);
             c.mac = Some(LogicalSize { w: 1280, h: 720 });
-            let _ = ingest(
+            let _ = ingest_ok(
                 &prop(observe_id::OSD_DIMS, PropertyValue::Node(node)),
                 &state,
                 &c,
@@ -559,29 +572,29 @@ mod tests {
     #[test]
     fn the_extent_carries_the_reported_scale_at_every_covered_scale() {
         let logical = LogicalSize { w: 1280, h: 720 };
-        let observed: Vec<Option<(Scale, LogicalSize)>> = COVERED_SCALES
+        let observed: Vec<Result<Option<(Scale, LogicalSize)>, Unrepresentable>> = COVERED_SCALES
             .into_iter()
             .map(|scale| {
                 let physical = logical.to_physical(scale)?;
                 let state = IngestState::new();
                 digest_dims(&state, i64::from(physical.w), i64::from(physical.h), scale);
-                state.window_extent().map(|e| (e.scale(), e.logical()))
+                Ok(state.window_extent().map(|e| (e.scale(), e.logical())))
             })
             .collect();
         assert_eq!(
             observed,
-            COVERED_SCALES.map(|s| Some((s, logical))).to_vec()
+            COVERED_SCALES.map(|s| Ok(Some((s, logical)))).to_vec()
         );
     }
 
     #[test]
     fn the_extent_carries_the_host_s_logical_size_verbatim() {
         let logical = LogicalSize { w: 1281, h: 721 };
-        let observed: Vec<Option<LogicalSize>> = COVERED_SCALES
+        let observed: Vec<Result<LogicalSize, ExtentError>> = COVERED_SCALES
             .into_iter()
             .map(|scale| extent_at(scale, logical).map(|e| e.logical()))
             .collect();
-        assert_eq!(observed, vec![Some(logical); COVERED_SCALES.len()]);
+        assert_eq!(observed, vec![Ok(logical); COVERED_SCALES.len()]);
     }
 
     #[test]
@@ -620,12 +633,32 @@ mod tests {
             ("w".into(), Node::Int(0)),
             ("h".into(), Node::Int(1080)),
         ]);
-        let out = ingest(
+        let out = ingest_ok(
             &prop(observe_id::OSD_DIMS, PropertyValue::Node(node)),
             &state,
             &ctx(Scale::ONE),
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn osd_dims_out_of_range_is_an_error_and_keeps_the_extent() {
+        let state = IngestState::new();
+        digest_dims(&state, 1600, 900, Scale::ONE);
+        let node = Node::Map(vec![
+            ("w".into(), Node::Int(i64::from(i32::MAX) + 1)),
+            ("h".into(), Node::Int(1080)),
+        ]);
+        let out = ingest(
+            &prop(observe_id::OSD_DIMS, PropertyValue::Node(node)),
+            &state,
+            &ctx(Scale::ONE),
+        );
+        assert!(matches!(out, Err(IngestError::OsdDimsRange(_))));
+        assert_eq!(
+            state.window_extent().map(|e| e.physical()),
+            Some(PhysicalSize { w: 1600, h: 900 })
+        );
     }
 
     #[test]
@@ -639,7 +672,7 @@ mod tests {
             "seekable-ranges".into(),
             Node::Array(vec![range.clone(), range]),
         )]);
-        let out = ingest(
+        let out = ingest_ok(
             &prop(observe_id::CACHE_STATE, PropertyValue::Node(root)),
             &state,
             &ctx(Scale::ONE),
@@ -655,14 +688,14 @@ mod tests {
     #[test]
     fn shutdown_event_returns_terminal() {
         let state = IngestState::new();
-        let out = ingest(&Event::Shutdown, &state, &ctx(Scale::ONE));
+        let out = ingest_ok(&Event::Shutdown, &state, &ctx(Scale::ONE));
         assert!(matches!(out[0], IngestOut::Shutdown));
     }
 
     #[test]
     fn end_file_maps_reason() {
         let state = IngestState::new();
-        let out = ingest(
+        let out = ingest_ok(
             &Event::EndFile(jfn_mpv::EndFileReason::Eof),
             &state,
             &ctx(Scale::ONE),
@@ -676,14 +709,14 @@ mod tests {
     #[test]
     fn file_loaded_emits_input() {
         let state = IngestState::new();
-        let out = ingest(&Event::FileLoaded, &state, &ctx(Scale::ONE));
+        let out = ingest_ok(&Event::FileLoaded, &state, &ctx(Scale::ONE));
         assert!(matches!(out[0], IngestOut::Input(Input::FileLoaded)));
     }
 
     #[test]
     fn client_message_jfn_close_requests_close() {
         let state = IngestState::new();
-        let out = ingest(
+        let out = ingest_ok(
             &Event::ClientMessage(vec!["jfn-close".to_string()]),
             &state,
             &ctx(Scale::ONE),
@@ -695,7 +728,7 @@ mod tests {
     #[test]
     fn client_message_other_script_is_ignored() {
         let state = IngestState::new();
-        let out = ingest(
+        let out = ingest_ok(
             &Event::ClientMessage(vec!["some-other-script-message".to_string()]),
             &state,
             &ctx(Scale::ONE),
@@ -706,7 +739,7 @@ mod tests {
     #[test]
     fn client_message_empty_args_is_ignored_without_panic() {
         let state = IngestState::new();
-        let out = ingest(&Event::ClientMessage(Vec::new()), &state, &ctx(Scale::ONE));
+        let out = ingest_ok(&Event::ClientMessage(Vec::new()), &state, &ctx(Scale::ONE));
         assert!(out.is_empty());
     }
 }

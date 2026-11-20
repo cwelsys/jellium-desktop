@@ -27,13 +27,17 @@ use jfn_mpv::api::{
     jfn_mpv_toggle_fullscreen,
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
-use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
+use jfn_platform_abi::WindowStateError;
+use jfn_platform_abi::geometry::{
+    Bounds, ClampError, PlacedGeometry, WindowGeometry, clamp_to_screen,
+};
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
 use crate::input::{
     jfn_input_windows_resize_to_parent, jfn_input_windows_run_input_thread,
     jfn_input_windows_stop_input_thread,
 };
+use crate::monitor::Monitor;
 
 struct WinState {
     mpv_hwnd_raw: usize,
@@ -69,12 +73,6 @@ pub(crate) fn win_hwnd() -> Option<HWND> {
     (raw != 0).then(|| hwnd_from_raw(raw))
 }
 
-/// The stored HWND, taken from mpv's observed `window-id` on first use. The
-/// boot wait pulls the window snapshot before `win_init` runs, so resolution
-/// cannot wait for init. `None` until mpv's VO has a window.
-///
-/// Reads a cached atomic — no mpv property read, so no thread that pulls the
-/// snapshot can serialize against the mpv core or mpv's VO GUI thread.
 pub(crate) fn win_ensure_hwnd() -> Option<HWND> {
     if let Some(hwnd) = win_hwnd() {
         return Some(hwnd);
@@ -104,10 +102,10 @@ pub(crate) fn win_is_fullscreen() -> bool {
 
 /// `GetDpiForWindow`/96 once the window exists, `GetDpiForSystem`/96 before
 /// it does.
-pub(crate) fn win_get_scale() -> jfn_platform_abi::Scale {
+pub(crate) fn win_get_scale() -> Result<jfn_platform_abi::Scale, WindowStateError> {
     match crate::window::client_scale() {
-        Some(scale) => scale,
-        None => win_display_scale(),
+        Err(WindowStateError::NoWindow) => Ok(win_display_scale()),
+        sampled => sampled,
     }
 }
 
@@ -166,29 +164,37 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
         let msg = unsafe { &*(lp.0 as *const CWPRETSTRUCT) };
         let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
         if (msg.hwnd.0 as usize) == target_hwnd_raw {
-            match msg.message {
+            let sampled = match msg.message {
                 WM_SIZE if msg.wParam.0 == SIZE_MINIMIZED as usize => {
                     if !std::mem::replace(&mut STATE.lock().was_minimized, true) {
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(false);
                     }
+                    Ok(())
                 }
                 WM_SIZE => {
                     let restored = std::mem::replace(&mut STATE.lock().was_minimized, false);
-                    if let Some(client) = crate::window::publish_deferred() {
+                    let published = crate::window::publish_deferred();
+                    if let Ok(Some(client)) = published {
                         jfn_input_windows_resize_to_parent(client.w, client.h);
                     }
                     if restored {
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(true);
                     }
+                    published.map(|_| ())
                 }
-                WM_MOVE => {
-                    crate::window::sample();
+                WM_MOVE => crate::window::sample().map(|_| ()),
+                WM_DPICHANGED | WM_STYLECHANGED => crate::window::publish_deferred().map(|_| ()),
+                WM_CLOSE => {
+                    jfn_shutdown_initiate();
+                    Ok(())
                 }
-                WM_DPICHANGED | WM_STYLECHANGED => {
-                    crate::window::publish_deferred();
-                }
-                WM_CLOSE => jfn_shutdown_initiate(),
-                _ => {}
+                _ => Ok(()),
+            };
+            if let Err(e) = sampled {
+                tracing::error!(
+                    target: "platform",
+                    "window sample: {e}; the stored window state stands"
+                );
             }
         }
     }
@@ -254,7 +260,8 @@ pub(crate) fn win_init(_mpv: *mut c_void) -> Result<(), jfn_platform_abi::Platfo
         }
     };
     let hwnd_raw = hwnd.0 as usize;
-    crate::window::republish();
+    crate::window::republish()
+        .map_err(|e| jfn_platform_abi::PlatformInitError::backend("Windows window sample", e))?;
 
     crate::render::init(hwnd_from_raw(hwnd_raw))?;
 
@@ -283,7 +290,8 @@ pub(crate) fn win_init(_mpv: *mut c_void) -> Result<(), jfn_platform_abi::Platfo
         })?;
     STATE.lock().input_thread = Some(join);
 
-    crate::window::republish();
+    crate::window::republish()
+        .map_err(|e| jfn_platform_abi::PlatformInitError::backend("Windows window sample", e))?;
     STATE.lock().initialized = true;
     tracing::info!("Windows DirectComposition compositor initialized");
     Ok(())
@@ -326,10 +334,12 @@ pub(crate) fn win_on_window_handle_changed(id: i64) {
     crate::input::jfn_input_windows_recreate(raw);
     jfn_windows_sink::jfn_windows_sink_stop();
     jfn_windows_sink::jfn_windows_sink_start_for(raw as isize);
-    crate::window::republish();
+    if let Err(error) = crate::window::republish() {
+        tracing::error!("VO window sample failed: {error}");
+    }
 }
 
-pub(crate) fn win_cleanup() {
+pub(crate) fn win_cleanup() -> Result<(), crate::window::NotifierPanicked> {
     STATE.lock().initialized = false;
     jfn_input_windows_stop_input_thread();
     let join = STATE.lock().input_thread.take();
@@ -344,41 +354,30 @@ pub(crate) fn win_cleanup() {
         }
         STATE.lock().wndproc_hook_raw = 0;
     }
-    crate::window::stop_notifier();
+    let notifier = crate::window::stop_notifier();
 
     crate::render::cleanup();
     crate::window::clear();
     STATE.lock().mpv_hwnd_raw = 0;
+    notifier
 }
 
-/// Resolve saved geometry against the primary monitor's working area so the
-/// window never opens larger than the screen or off-screen, and center any
-/// unset axis.
-pub(crate) fn win_clamp_window_geometry(
-    w: &mut c_int,
-    h: &mut c_int,
-    x: &mut c_int,
-    y: &mut c_int,
-) {
+pub(crate) fn win_clamp_window_geometry(g: &WindowGeometry) -> Result<PlacedGeometry, ClampError> {
+    clamp_to_screen(g, Monitor::find, || primary_work_bounds().map(Some))
+}
+
+fn primary_work_bounds() -> Result<Bounds, ClampError> {
     let mut work = RECT::default();
-    let ok = unsafe {
+    unsafe {
         SystemParametersInfoW(
             SPI_GETWORKAREA,
             0,
             Some(&mut work as *mut RECT as *mut c_void),
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
         )
-    };
-    if ok.is_err() {
-        return;
     }
+    .map_err(|_| ClampError::WorkArea)?;
     let vw = work.right - work.left;
     let vh = work.bottom - work.top;
-    let mut g = WindowGeometry::from_raw(*w, *h, *x, *y);
-    clamp_to_bounds(&mut g, Bounds { w: vw, h: vh });
-    *w = g.w;
-    *h = g.h;
-    let (nx, ny) = g.raw_position();
-    *x = nx;
-    *y = ny;
+    Ok(Bounds { w: vw, h: vh })
 }
