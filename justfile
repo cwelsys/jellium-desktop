@@ -35,7 +35,12 @@ clean:
 
 # Run tests
 [group('test')]
-[unix]
+[linux]
+test: build
+    LD_LIBRARY_PATH="{{justfile_directory()}}/build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" cargo test --manifest-path src/Cargo.toml --workspace
+
+[group('test')]
+[macos]
 test: build
     cargo test --manifest-path src/Cargo.toml --workspace
 

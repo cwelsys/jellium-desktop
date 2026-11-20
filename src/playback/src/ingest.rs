@@ -76,8 +76,6 @@ pub(crate) enum IngestOut {
     /// Terminal: libmpv has shut down. Caller breaks out of the event
     /// loop and triggers the rest of the app's teardown.
     Shutdown,
-    /// mpv's `CLOSE_WIN` binding sent the `jfn-close` script message.
-    CloseRequested,
 }
 
 /// Shared atomic cache mirroring the prior C++ `s_*` statics. Holds
@@ -163,15 +161,6 @@ pub(crate) fn ingest<C: IngestCtx>(
             .map(IngestOut::Input)
             .collect(),
         Event::PropertyChange { id, value, .. } => digest_property(*id, value, state, ctx)?,
-        Event::ClientMessage(args) => {
-            // mpv scripts may send their own client messages; only the
-            // CLOSE_WIN binding's `jfn-close` concerns us.
-            if args.first().map(String::as_str) == Some("jfn-close") {
-                vec![IngestOut::CloseRequested]
-            } else {
-                Vec::new()
-            }
-        }
         _ => Vec::new(),
     })
 }
@@ -711,35 +700,5 @@ mod tests {
         let state = IngestState::new();
         let out = ingest_ok(&Event::FileLoaded, &state, &ctx(Scale::ONE));
         assert!(matches!(out[0], IngestOut::Input(Input::FileLoaded)));
-    }
-
-    #[test]
-    fn client_message_jfn_close_requests_close() {
-        let state = IngestState::new();
-        let out = ingest_ok(
-            &Event::ClientMessage(vec!["jfn-close".to_string()]),
-            &state,
-            &ctx(Scale::ONE),
-        );
-        assert_eq!(out.len(), 1);
-        assert!(matches!(out[0], IngestOut::CloseRequested));
-    }
-
-    #[test]
-    fn client_message_other_script_is_ignored() {
-        let state = IngestState::new();
-        let out = ingest_ok(
-            &Event::ClientMessage(vec!["some-other-script-message".to_string()]),
-            &state,
-            &ctx(Scale::ONE),
-        );
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn client_message_empty_args_is_ignored_without_panic() {
-        let state = IngestState::new();
-        let out = ingest_ok(&Event::ClientMessage(Vec::new()), &state, &ctx(Scale::ONE));
-        assert!(out.is_empty());
     }
 }
