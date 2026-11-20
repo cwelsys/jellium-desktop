@@ -109,7 +109,7 @@ pub fn jfn_close_set_handler(handler: Option<fn() -> bool>) {
     CLOSE.store(ptr, Ordering::Release);
 }
 
-/// Window button, compositor close, or mpv's `CLOSE_WIN`. Shuts down if no
+/// Window button or compositor close. Shuts down if no
 /// policy is installed or it declined.
 pub fn jfn_close_requested() {
     let ptr = CLOSE.load(Ordering::Acquire);
